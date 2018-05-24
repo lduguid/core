@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -189,8 +191,9 @@ bool SqlQueryHolder::Execute(MaNGOS::IQueryCallback * callback, Database *databa
 
     /// delay the execution of the queries, sync them with the delay thread
     /// which will in turn resync on execution (via the queue) and call back
-    SqlQueryHolderEx *holderEx = new SqlQueryHolderEx(this, callback, queue);
-    database->AddToDelayQueue(holderEx);
+    SqlQueryHolderEx *holderEx = new SqlQueryHolderEx(this, callback, queue, serialId);
+
+    database->AddToSerialDelayQueue(holderEx);
     return true;
 }
 

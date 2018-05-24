@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -143,6 +145,14 @@ double rand_chance (void)
 float rand_chance_f(void)
 {
     return (float)mtRand->randExc (100.0);
+}
+
+Milliseconds randtime(Milliseconds const& min, Milliseconds const& max)
+{
+    long long diff = max.count() - min.count();
+    MANGOS_ASSERT(diff >= 0);
+    MANGOS_ASSERT(diff <= (uint32)-1);
+    return min + Milliseconds(urand(0, diff));
 }
 
 Tokens StrSplit(const std::string &src, const std::string &sep)

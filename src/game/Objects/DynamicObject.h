@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -53,6 +55,7 @@ class DynamicObject : public WorldObject
         float GetRadius() const { return m_radius; }
         DynamicObjectType GetType() const { return (DynamicObjectType)GetByteValue(DYNAMICOBJECT_BYTES,0); }
         bool NeedsRefresh(Unit *unit) const;
+        bool IsChanneled() const { return m_channeled; }
         void AddAffected(Unit *unit) { m_affected[unit->GetObjectGuid()] = 0; }
         void RemoveAffected(Unit *unit) { m_affected.erase(unit->GetObjectGuid()); }
         void Delay(int32 delaytime);
@@ -75,6 +78,7 @@ class DynamicObject : public WorldObject
         int32 m_aliveDuration;
         float m_radius;                                     // radius apply persistent effect, 0 = no persistent effect
         bool m_positive;
+        bool m_channeled;
         AffectedMap m_affected;
     private:
         GridReference<DynamicObject> m_gridRef;

@@ -20,6 +20,11 @@ void ElementalInvasion::Update()
     auto stageEarth = sObjectMgr.GetSavedVariable(VAR_EARTH, 0);
     auto stageWater = sObjectMgr.GetSavedVariable(VAR_WATER, 0);
 
+    auto delayFire = sObjectMgr.GetSavedVariable(VAR_DELAY_FIRE, 0);
+    auto delayAir = sObjectMgr.GetSavedVariable(VAR_DELAY_AIR, 0);
+    auto delayWater = sObjectMgr.GetSavedVariable(VAR_DELAY_WATER, 0);
+    auto delayEarth = sObjectMgr.GetSavedVariable(VAR_DELAY_EARTH, 0);
+
     if (!sGameEventMgr.IsActiveEvent(EVENT_INVASION))
     {
         auto invasionTime = sObjectMgr.GetSavedVariable(VAR_INVAS_TIMER, 0);
@@ -32,22 +37,23 @@ void ElementalInvasion::Update()
             StartLocalInvasion(EVENT_IND_AIR, stageAir);
             StartLocalInvasion(EVENT_IND_WATER, stageWater);
             StartLocalInvasion(EVENT_IND_EARTH, stageEarth);
+
+            // Recover after restart
+            StartLocalBoss(EVENT_IND_FIRE, stageFire, delayFire);
+            StartLocalBoss(EVENT_IND_AIR, stageAir, delayAir);
+            StartLocalBoss(EVENT_IND_WATER, stageWater, delayWater);
+            StartLocalBoss(EVENT_IND_EARTH, stageEarth, delayEarth);
         }
     }
     else
     {
-        auto delayFire = sObjectMgr.GetSavedVariable(VAR_DELAY_FIRE, 0);
-        auto delayAir = sObjectMgr.GetSavedVariable(VAR_DELAY_AIR, 0);
-        auto delayWater = sObjectMgr.GetSavedVariable(VAR_DELAY_WATER, 0);
-        auto delayEarth = sObjectMgr.GetSavedVariable(VAR_DELAY_EARTH, 0);
+        // check bosses, spawn if possible
+        StartLocalBoss(EVENT_IND_FIRE, stageFire, delayFire);
+        StartLocalBoss(EVENT_IND_AIR, stageAir, delayAir);
+        StartLocalBoss(EVENT_IND_WATER, stageWater, delayWater);
+        StartLocalBoss(EVENT_IND_EARTH, stageEarth, delayEarth);
 
-        // bosses are not rifted in yet, all hail the bosses
-        StartLocalBoss(EVENT_IND_FIRE, stageFire);
-        StartLocalBoss(EVENT_IND_AIR, stageAir);
-        StartLocalBoss(EVENT_IND_WATER, stageWater);
-        StartLocalBoss(EVENT_IND_EARTH, stageEarth);
-
-        // bosses were just killed
+        // check for boss death
         // stop rifts immediately, stop bosses' events with a delay to allow looting
         StopLocalInvasion(EVENT_IND_FIRE, stageFire, delayFire);
         StopLocalInvasion(EVENT_IND_AIR, stageAir, delayAir);
@@ -73,32 +79,16 @@ void ElementalInvasion::Enable()
 
 void ElementalInvasion::Disable()
 {
-    // stop rifts
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_FIRE].eventRift))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_FIRE].eventRift, true);
+    for (uint8 i = 0; i < 4; ++i)
+    {
+        // Stop rifts
+        if (sGameEventMgr.IsActiveEvent(InvasionData[i].eventRift))
+            sGameEventMgr.StopEvent(InvasionData[i].eventRift, true);
 
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_AIR].eventRift))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_AIR].eventRift, true);
-
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_WATER].eventRift))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_WATER].eventRift, true);
-
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_EARTH].eventRift))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_EARTH].eventRift, true);
-
-    // stop bosses
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_FIRE].eventBoss))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_FIRE].eventBoss, true);
-
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_AIR].eventBoss))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_AIR].eventBoss, true);
-
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_WATER].eventBoss))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_WATER].eventBoss, true);
-
-    if (sGameEventMgr.IsActiveEvent(InvasionData[EVENT_IND_EARTH].eventBoss))
-        sGameEventMgr.StopEvent(InvasionData[EVENT_IND_EARTH].eventBoss, true);
-
+        // Stop bosses
+        if (sGameEventMgr.IsActiveEvent(InvasionData[i].eventBoss))
+            sGameEventMgr.StopEvent(InvasionData[i].eventBoss, true);
+    }
     // stop main event
     if (sGameEventMgr.IsActiveEvent(EVENT_INVASION))
         sGameEventMgr.StopEvent(EVENT_INVASION, true);
@@ -110,23 +100,25 @@ void ElementalInvasion::Disable()
 void ElementalInvasion::StartLocalInvasion(uint8 index, uint32 stage)
 {
     if (stage < STAGE_BOSS_DOWN)
-    {
         sGameEventMgr.StartEvent(InvasionData[index].eventRift, true);
-
-        if (stage == STAGE_BOSS)
-            sGameEventMgr.StartEvent(InvasionData[index].eventBoss, true);
-    }
 }
 
-void ElementalInvasion::StartLocalBoss(uint8 index, uint32 stage)
+void ElementalInvasion::StartLocalBoss(uint8 index, uint32 stage, uint8 delay)
 {
-    if (stage == STAGE_BOSS && !sGameEventMgr.IsActiveEvent(InvasionData[index].eventBoss))
+    // If we're in boss stage and the event is not started, start it.
+    // Similarly, if the boss is dead but we're delaying the despawn, start the
+    // event. Must do this or the next time the event is triggered the boss will
+    // be spawned dead
+    if (((stage == STAGE_BOSS_DOWN && delay > 0) || stage == STAGE_BOSS) && 
+            !sGameEventMgr.IsActiveEvent(InvasionData[index].eventBoss))
         sGameEventMgr.StartEvent(InvasionData[index].eventBoss, true);
 }
 
 void ElementalInvasion::StopLocalInvasion(uint8 index, uint32 stage, uint8 delay)
 {
-    if (stage == STAGE_BOSS_DOWN && sGameEventMgr.IsActiveEvent(InvasionData[index].eventBoss))
+    // Process regardless of event activeness, otherwise the main event can
+    // become perpetually stuck waiting for the delay to end
+    if (stage == STAGE_BOSS_DOWN)
     {
         if (sGameEventMgr.IsActiveEvent(InvasionData[index].eventRift))
             sGameEventMgr.StopEvent(InvasionData[index].eventRift, true);
@@ -136,10 +128,8 @@ void ElementalInvasion::StopLocalInvasion(uint8 index, uint32 stage, uint8 delay
             --delay;
             sObjectMgr.SetSavedVariable(InvasionData[index].varDelay, delay, true);
         }
-        else
-        {
+        else if (sGameEventMgr.IsActiveEvent(InvasionData[index].eventBoss))
             sGameEventMgr.StopEvent(InvasionData[index].eventBoss, true);
-        }
     }
 }
 
@@ -251,59 +241,59 @@ MoonbrookEventState Moonbrook::GetMoonbrookState()
 
 void DragonsOfNightmare::Update()
 {
-    std::vector<ObjectGuid> dragons;
-
-    uint32 varAliveCount = DEF_ALIVE_COUNT;
-    uint32 varReqUpdate = DEF_REQ_UPDATE;
-    uint32 varRespawnTimer = time(nullptr) + urand(4 * 24 * 3600, 7 * 24 * 3600);
-
-    CheckNightmareDragonsVariables(varAliveCount, varReqUpdate, varRespawnTimer);
-    LoadDragons(dragons);
-
-    // if at least one is alive and at least one is dead
-    // update the respawn timer of dead dragons by some big value
-    // thus we are just waiting for all dragons to die
-    if (varAliveCount && varAliveCount < 4)
-        UpdateRespawnTimeForDeadDragons(dragons, 9999999999);
-
-    if (!varReqUpdate)
+    std::vector<ObjectGuid> dragonGUIDs;
+    // Get Dragon GUIDs, these should always be available if the unit exists
+    if (!LoadDragons(dragonGUIDs))
     {
-        if (!sGameEventMgr.IsActiveEvent(m_eventId))
-        {
-            if (varRespawnTimer < time(nullptr))
-            {
-                if (!varAliveCount)
-                {
-                    varAliveCount = DEF_ALIVE_COUNT;
-                    sObjectMgr.SetSavedVariable(VAR_ALIVE_COUNT, DEF_ALIVE_COUNT, true);
-                }
-
-                PermutateDragons();
-                BASIC_LOG("GameEventMgr: [Dragons of Nightmare] %u of 4 alive.", varAliveCount);
-                sGameEventMgr.StartEvent(m_eventId, true);
-            }
-        }
-
+        sLog.outError("[Dragons of Nightmare] Only %u nightmare dragons exist in the database, there should be 4", dragonGUIDs.size());
         return;
     }
 
-    // allow some time before event stop so the players could loot the body
-    if (varReqUpdate > 1)
-    {
-        --varReqUpdate;
-        sObjectMgr.SetSavedVariable(VAR_REQ_UPDATE, varReqUpdate, true);
-
-        return;
-    }
-
-    // stop the event, update all timers
+    // Actual Creature objects do not exist unless the event is active
     if (sGameEventMgr.IsActiveEvent(m_eventId))
     {
-        UpdateRespawnTimeForDeadDragons(dragons, varRespawnTimer);
-        sObjectMgr.SetSavedVariable(VAR_REQ_UPDATE, 0, true);
-        sObjectMgr.SetSavedVariable(VAR_REQ_PERM, 1, true);
-        BASIC_LOG("GameEventMgr: [Dragons of Nightmare] last dragon just died.", varAliveCount);
-        sGameEventMgr.StopEvent(m_eventId, true);
+        // Event is active, dragons exist in the world
+        uint32 alive = 0;
+        // Update respawn time to 9999999999 if the dragon is dead, get current alive count
+        GetAliveCountAndUpdateRespawnTime(dragonGUIDs, alive, 9999999999);
+
+        // If any dragons are still alive, do not pass go. We'll update once they are all dead
+        if (alive)
+            return;
+
+        // All the dragons are dead. We have a minor delay on ending the event so that groups can loot
+        // the last dragon before we despawn the dragon via ending the event
+        uint32 varReqUpdate = DEF_STOP_DELAY;
+        CheckSingleVariable(VAR_REQ_UPDATE, varReqUpdate); // Check and update default value if none exists
+
+        // Decrement and check value. Once we hit zero, event is done.
+        if (!varReqUpdate)
+        {
+            // We're done, update the permutation and set the respawn time
+            uint32 varRespawnTimer = time(nullptr) + urand(4 * 24 * 3600, 7 * 24 * 3600);
+            GetAliveCountAndUpdateRespawnTime(dragonGUIDs, alive, varRespawnTimer);
+
+            sObjectMgr.SetSavedVariable(VAR_RESP_TIME, varRespawnTimer, true);
+            varReqUpdate = DEF_STOP_DELAY; // reset for next round
+
+            // For next spawn
+            PermutateDragons();
+            sGameEventMgr.StopEvent(m_eventId, true);
+        }
+        else
+            --varReqUpdate;
+
+        sObjectMgr.SetSavedVariable(VAR_REQ_UPDATE, varReqUpdate, true);
+    }
+    else
+    {
+        // Event is not active, check respawn time. If we're at the respawn time, start the event
+        // so dragons are visible
+        uint32 varRespawnTimer = 0;
+        CheckSingleVariable(VAR_RESP_TIME, varRespawnTimer);
+
+        if (varRespawnTimer < time(nullptr))
+            sGameEventMgr.StartEvent(m_eventId, true);
     }
 }
 
@@ -316,8 +306,7 @@ void DragonsOfNightmare::Disable()
 {
     if (sGameEventMgr.IsActiveEvent(m_eventId))
     {
-        sObjectMgr.SetSavedVariable(VAR_REQ_UPDATE, 0, true);
-        sObjectMgr.SetSavedVariable(VAR_REQ_PERM, 1, true);
+        sObjectMgr.SetSavedVariable(VAR_REQ_UPDATE, DEF_STOP_DELAY, true);
         sGameEventMgr.StopEvent(m_eventId, true);
     }
 }
@@ -339,25 +328,15 @@ void DragonsOfNightmare::CheckSingleVariable(uint32 idx, uint32& value)
     }
 }
 
-void DragonsOfNightmare::CheckNightmareDragonsVariables(uint32 &aliveCount, uint32 &reqUpdate, uint32 &respawnTimer)
+void DragonsOfNightmare::GetAliveCountAndUpdateRespawnTime(std::vector<ObjectGuid> &dragons, uint32 &alive, time_t respawnTime)
 {
-    CheckSingleVariable(VAR_ALIVE_COUNT, aliveCount);
-    CheckSingleVariable(VAR_REQ_UPDATE, reqUpdate);
-    CheckSingleVariable(VAR_RESP_TIME, respawnTimer);
-}
-
-void DragonsOfNightmare::UpdateRespawnTimeForDeadDragons(std::vector<ObjectGuid> &dragons, time_t respawnTime)
-{
-    if (dragons.empty())
-        return;
-
-    for (uint8 i = 0; i < 4; ++i)
+    for (auto& guid : dragons)
     {
-        auto cData = sObjectMgr.GetCreatureData(dragons[i].GetCounter());
+        auto cData = sObjectMgr.GetCreatureData(guid.GetCounter());
 
         if (!cData)
         {
-            sLog.outError("GameEventMgr: [Dragons of Nightmare] creature data %u not found!", dragons[i].GetCounter());
+            sLog.outError("GameEventMgr: [Dragons of Nightmare] creature data %u not found!", guid.GetCounter());
             continue;
         }
 
@@ -372,20 +351,22 @@ void DragonsOfNightmare::UpdateRespawnTimeForDeadDragons(std::vector<ObjectGuid>
             continue;
         }
 
-        auto pCreature = map->GetCreature(dragons[i]);
+        auto pCreature = map->GetCreature(guid);
 
         if (!pCreature)
         {
-            sLog.outError("GameEventMgr: [Dragons of Nightmare] creature %u not found!", dragons[i].GetCounter());
+            sLog.outError("GameEventMgr: [Dragons of Nightmare] creature %u not found!", guid.GetCounter());
             continue;
         }
 
         if (pCreature->isDead())
-            map->GetPersistentState()->SaveCreatureRespawnTime(dragons[i].GetCounter(), respawnTime);
+            map->GetPersistentState()->SaveCreatureRespawnTime(guid.GetCounter(), respawnTime);
+        else
+            ++alive;
     }
 }
 
-bool DragonsOfNightmare::LoadDragons(std::vector<ObjectGuid> &dragons)
+bool DragonsOfNightmare::LoadDragons(std::vector<ObjectGuid> &dragonGUIDs)
 {
     for (uint8 i = 0; i < 4; ++i)
     {
@@ -398,27 +379,23 @@ bool DragonsOfNightmare::LoadDragons(std::vector<ObjectGuid> &dragons)
             return false;
         }
 
-        dragons.push_back(dCreatureGuid);
+        dragonGUIDs.push_back(dCreatureGuid);
     }
 
     return true;
 }
 
+//void DragonsOfNightmare::GetAliveCount(std::vector<ObjectGuid> dragonGUIDs, uint32 &alive)
+
 void DragonsOfNightmare::PermutateDragons()
 {
-    auto reqPerm = sObjectMgr.GetSavedVariable(VAR_REQ_PERM, 0);
-
-    if (!reqPerm) return;
-
     std::vector<uint32> permutation = { NPC_LETHON, NPC_EMERISS, NPC_YSONDRE, NPC_TAERAR };
     std::random_shuffle(permutation.begin(), permutation.end());
 
-    sObjectMgr.SetSavedVariable(VAR_PERM_1, permutation[0]);
-    sObjectMgr.SetSavedVariable(VAR_PERM_2, permutation[1]);
-    sObjectMgr.SetSavedVariable(VAR_PERM_3, permutation[2]);
-    sObjectMgr.SetSavedVariable(VAR_PERM_4, permutation[3]);
-
-    sObjectMgr.SetSavedVariable(VAR_REQ_PERM, 0);
+    sObjectMgr.SetSavedVariable(VAR_PERM_1, permutation[0], true);
+    sObjectMgr.SetSavedVariable(VAR_PERM_2, permutation[1], true);
+    sObjectMgr.SetSavedVariable(VAR_PERM_3, permutation[2], true);
+    sObjectMgr.SetSavedVariable(VAR_PERM_4, permutation[3], true);
 }
 
 /*

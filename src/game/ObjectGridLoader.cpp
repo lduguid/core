@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +24,7 @@
 #include "ObjectMgr.h"
 #include "MapPersistentStateMgr.h"
 #include "Creature.h"
+#include "CreatureAI.h"
 #include "GameObject.h"
 #include "DynamicObject.h"
 #include "Corpse.h"
@@ -71,7 +74,7 @@ ObjectGridRespawnMover::Visit(CreatureMapType &m)
 
         if (cur_cell.DiffGrid(resp_cell))
         {
-            c->GetMap()->CreatureRespawnRelocation(c);
+            c->GetMap()->CreatureRespawnRelocation(c, true);
             // false result ignored: will be unload with other creatures at grid
         }
     }
@@ -330,7 +333,7 @@ ObjectGridStoper::Visit(CreatureMapType &m)
     // stop any fights at grid de-activation and remove dynobjects created at cast by creatures
     for (CreatureMapType::iterator iter = m.begin(); iter != m.end(); ++iter)
     {
-        iter->getSource()->CombatStop();
+        iter->getSource()->AI()->EnterEvadeMode();
         iter->getSource()->DeleteThreatList();
         iter->getSource()->RemoveAllDynObjects();
     }

@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -753,33 +755,17 @@ uint32 BattleGround::GetBattlemasterEntry() const
 
 void BattleGround::RewardMark(Player *plr, uint32 count)
 {
-    switch (GetTypeID())
-    {
-        case BATTLEGROUND_AV:
-            if (count == ITEM_WINNER_COUNT)
-                RewardSpellCast(plr, SPELL_AV_MARK_WINNER);
-            else
-                RewardSpellCast(plr, SPELL_AV_MARK_LOSER);
-            break;
-        case BATTLEGROUND_WS:
-            if (count == ITEM_WINNER_COUNT)
-                RewardSpellCast(plr, SPELL_WS_MARK_WINNER);
-            else
-                RewardSpellCast(plr, SPELL_WS_MARK_LOSER);
-            break;
-        case BATTLEGROUND_AB:
-            if (count == ITEM_WINNER_COUNT)
-                RewardSpellCast(plr, SPELL_AB_MARK_WINNER);
-            else
-                RewardSpellCast(plr, SPELL_AB_MARK_LOSER);
-            break;
-        default:
-            break;
-    }
+    if (count == ITEM_WINNER_COUNT)
+        RewardSpellCast(plr, plr->GetTeamId() ? GetHordeWinSpell() : GetAllianceWinSpell());
+    else
+        RewardSpellCast(plr, plr->GetTeamId() ? GetHordeLoseSpell() : GetAllianceLoseSpell());
 }
 
 void BattleGround::RewardSpellCast(Player *plr, uint32 spell_id)
 {
+    if (!spell_id)
+        return;
+
     SpellEntry const *spellInfo = sSpellMgr.GetSpellEntry(spell_id);
     if (!spellInfo)
     {
@@ -843,7 +829,7 @@ void BattleGround::SendRewardMarkByMail(Player *plr, uint32 mark, uint32 count)
 
         MailDraft(subject, textBuf)
         .AddItem(markItem)
-        .SendMailTo(plr, MailSender(MAIL_CREATURE, bmEntry), MAIL_CHECK_MASK_NONE, 0, 3 * DAY);
+        .SendMailTo(plr, MailSender(MAIL_CREATURE, bmEntry), MAIL_CHECK_MASK_COPIED, 15 * MINUTE, 1 * DAY);
     }
 }
 
@@ -1375,7 +1361,7 @@ void BattleGround::ReturnPlayersToHomeGY()
     }
 }
 
-void BattleGround::SpawnEvent(uint8 event1, uint8 event2, bool spawn, bool forced_despawn)
+void BattleGround::SpawnEvent(uint8 event1, uint8 event2, bool spawn, bool forced_despawn, uint32 delay)
 {
     // stop if we want to spawn something which was already spawned
     // or despawn something which was already despawned
@@ -1411,7 +1397,7 @@ void BattleGround::SpawnEvent(uint8 event1, uint8 event2, bool spawn, bool force
 
     BGObjects::const_iterator itr2 = m_EventObjects[MAKE_PAIR32(event1, event2)].gameobjects.begin();
     for (; itr2 != m_EventObjects[MAKE_PAIR32(event1, event2)].gameobjects.end(); ++itr2)
-        SpawnBGObject(*itr2, (spawn) ? RESPAWN_IMMEDIATELY : RESPAWN_ONE_DAY);
+        SpawnBGObject(*itr2, (spawn) ? delay : RESPAWN_ONE_DAY);
 
     OnEventStateChanged(event1, event2, spawn);
 }
@@ -1448,21 +1434,27 @@ void BattleGround::SpawnBGObject(ObjectGuid guid, uint32 respawntime)
     GameObject *obj = map->GetGameObject(guid);
     if (!obj)
         return;
-    if (respawntime == 0)
+    if (respawntime != RESPAWN_ONE_DAY)
     {
         //we need to change state from GO_JUST_DEACTIVATED to GO_READY in case battleground is starting again
         if (obj->getLootState() == GO_JUST_DEACTIVATED)
             obj->SetLootState(GO_READY);
 
-        obj->SetRespawnTime(0);
+        if (obj->GetGOInfo()->type != GAMEOBJECT_TYPE_FLAGSTAND)
+            obj->SetGoState(GO_STATE_READY);
+
+        obj->SetRespawnTime(respawntime);
         if (obj->GetEntry() == 178786 || obj->GetEntry() == 178787 || obj->GetEntry() == 178788 || obj->GetEntry() == 178789)
             obj->SetRespawnDelay(60);
 
-        map->Add(obj);
+        if (!obj->GetRespawnTime())
+            map->Add(obj);
     }
     else
     {
-        map->Add(obj);
+        if (obj->GetGOInfo()->type != GAMEOBJECT_TYPE_FLAGSTAND)
+            obj->SetGoState(GO_STATE_ACTIVE_ALTERNATIVE);
+
         obj->SetRespawnTime(respawntime);
         obj->SetLootState(GO_JUST_DEACTIVATED);
     }
@@ -1646,7 +1638,7 @@ void BattleGround::HandleKillPlayer(Player *player, Player *killer)
     // - Apres la fin du buff - a ce moment la killer=NULL
 
     // add +1 kills to group and +1 killing_blows to killer
-    if (killer)
+    if (killer && player->getFaction() != killer->getFaction())
     {
         UpdatePlayerScore(killer, SCORE_HONORABLE_KILLS, 1);
         UpdatePlayerScore(killer, SCORE_KILLING_BLOWS, 1);

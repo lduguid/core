@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -462,6 +464,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
 
         bool Create(uint32 guidlow, CreatureCreatePos& cPos, CreatureInfo const* cinfo, Team team = TEAM_NONE, const CreatureData *data = nullptr, GameEventCreatureData const* eventData = nullptr);
         bool LoadCreatureAddon(bool reload = false);
+        void UnloadCreatureAddon(const CreatureDataAddon* data);
 
         // CreatureGroups
         CreatureGroup* GetCreatureGroup() const { return _creatureGroup; }
@@ -510,7 +513,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
 
         bool CanWalk() const override { return GetCreatureInfo()->InhabitType & INHABIT_GROUND; }
         bool CanSwim() const override { return IsPet() || GetCreatureInfo()->InhabitType & INHABIT_WATER; }
-        bool CanFly()  const override { return GetCreatureInfo()->InhabitType & INHABIT_AIR; }
+        bool CanFly()  const override { return !IsPet() && GetCreatureInfo()->InhabitType & INHABIT_AIR; }
 
         void SetReactState(ReactStates st) { m_reactState = st; }
         ReactStates GetReactState() const { return m_reactState; }
@@ -559,6 +562,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
 
         CreatureAI* AI() { return i_AI; }
         CreatureAI const* AI() const { return i_AI; }
+        void SetAInitializeOnRespawn(bool initialize) { m_AI_InitializeOnRespawn = initialize; }
 
         uint32 GetShieldBlockValue() const override
         {
@@ -579,6 +583,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
         void UpdateArmor() override;
         void UpdateMaxHealth() override;
         void UpdateMaxPower(Powers power) override;
+        void UpdateManaRegen() override;
         void UpdateAttackPowerAndDamage(bool ranged = false) override;
         void UpdateDamagePhysical(WeaponAttackType attType) override;
         uint32 GetCurrentEquipmentId() const { return m_equipmentId; }
@@ -620,6 +625,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
         bool lootForBody;
         bool lootForSkin;
         uint32 skinningForOthersTimer; // If == 0, then everyone can skin
+        bool lootForCreator = false;
 
         ObjectGuid GetLootRecipientGuid() const { return m_lootRecipientGuid; }
         uint32 GetLootGroupRecipientId() const { return m_lootGroupRecipientId; }
@@ -651,6 +657,8 @@ class MANGOS_DLL_SPEC Creature : public Unit
         bool HasSearchedAssistance() const { return m_AlreadySearchedAssistance; }
         bool CanAssistTo(const Unit* u, const Unit* enemy, bool checkfaction = true) const;
         bool CanInitiateAttack();
+
+        void SetTauntImmunity(bool immune);
 
         MovementGeneratorType GetDefaultMovementType() const { return m_defaultMovementType; }
         void SetDefaultMovementType(MovementGeneratorType mgt) { m_defaultMovementType = mgt; }
@@ -687,7 +695,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
 
         void SendZoneUnderAttackMessage(Player* attacker);
 
-        void SetInCombatWithZone();
+        void SetInCombatWithZone(bool initialPulse = true);
         bool canStartAttack(Unit const* who, bool force) const;
         Unit *SelectVictim();
         bool _IsTargetAcceptable(Unit const *target) const;
@@ -697,6 +705,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
         time_t GetCombatTime(bool total) const;
         void ResetCombatTime(bool combat = false);
         void UpdateCombatState(bool combat) { m_combatState = combat; }
+        void UpdateCombatWithZoneState(bool combat) { m_combatWithZoneState = combat; }
         void LogDeath(Unit* pKiller) const;
         void LogLongCombat() const;
         void LogScriptInfo(std::ostringstream &data) const;
@@ -772,6 +781,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
         uint32 _pacifiedTimer;
         void AllowManaRegen(bool v) { _manaRegen = v; }
         bool _manaRegen;
+        uint32 m_manaRegen;
 
         void RegenerateHealth();
         void RegenerateMana();
@@ -806,6 +816,8 @@ class MANGOS_DLL_SPEC Creature : public Unit
             return float(_playerDamageTaken) / (_playerDamageTaken + _nonPlayerDamageTaken);
         }
 
+        bool HasWeapon() const;
+
     protected:
         bool MeetsSelectAttackingRequirement(Unit* pTarget, SpellEntry const* pSpellInfo, uint32 selectFlags) const;
 
@@ -834,10 +846,12 @@ class MANGOS_DLL_SPEC Creature : public Unit
         uint32 m_respawnDelay;                              // (secs) delay between corpse disappearance and respawning
         uint32 m_corpseDelay;                               // (secs) delay between death and corpse disappearance
         float m_respawnradius;
+        uint32 m_combatPulseTimer;
 
         time_t m_combatStartTime;
         bool m_combatState;
         uint32 m_combatResetCount;
+        bool m_combatWithZoneState;                         // for raid bosses that set the entire raid in combat
 
         CreatureSubtype m_subtype;                          // set in Creatures subclasses for fast it detect without dynamic_cast use
         MovementGeneratorType m_defaultMovementType;
@@ -849,6 +863,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
         bool m_AlreadySearchedAssistance;
         bool m_regenHealth;
         bool m_AI_locked;
+        bool m_AI_InitializeOnRespawn;
         bool m_isDeadByDefault;
         uint32 m_temporaryFactionFlags;                     // used for real faction changes (not auras etc)
 

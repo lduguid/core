@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -104,8 +106,6 @@ void WorldSession::HandleMoveWorldportAckOpcode()
     if (GetPlayer()->m_InstanceValid == false && !mEntry->IsDungeon())
         GetPlayer()->m_InstanceValid = true;
 
-    GetPlayer()->SetSemaphoreTeleportFar(false);
-
     // relocate the player to the teleport destination
     if (!map)
     {
@@ -125,6 +125,7 @@ void WorldSession::HandleMoveWorldportAckOpcode()
     // while the player is in transit, for example the map may get full
     if (!GetPlayer()->GetMap()->Add(GetPlayer()))
     {
+        GetPlayer()->SetSemaphoreTeleportFar(false);
         // if player wasn't added to map, reset his map pointer!
         GetPlayer()->ResetMap();
 
@@ -141,6 +142,7 @@ void WorldSession::HandleMoveWorldportAckOpcode()
         }
         return;
     }
+    GetPlayer()->SetSemaphoreTeleportFar(false);
 
     // battleground state prepare (in case join to BG), at relogin/tele player not invited
     // only add to bg group and object, if the player was invited (else he entered through command)
@@ -202,6 +204,16 @@ void WorldSession::HandleMoveWorldportAckOpcode()
 
     //lets process all delayed operations on successful teleport
     GetPlayer()->ProcessDelayedOperations();
+
+    // Let the client know its new position by sending a heartbeat!
+    // The Windows client figures this out by itself, but the MacOS one does
+    // not.
+    //
+    // On a successful port, the camera of the MacOS client is facing south and
+    // ignores any movement from the transport object. Triggering
+    // `SMSG_STANDSTATE_UPDATE' with its current state resets the camera
+    // (implemented in `WorldSession::HandleZoneUpdateOpcode').
+    GetPlayer()->SendHeartBeat(true);
 }
 
 void WorldSession::HandleMoveTeleportAckOpcode(WorldPacket& recv_data)
@@ -253,6 +265,7 @@ void WorldSession::HandleMovementOpcodes(WorldPacket & recv_data)
     Unit *mover = _player->GetMover();
     if (mover->GetObjectGuid() != _clientMoverGuid)
         return;
+        
     Player *plMover = mover->GetTypeId() == TYPEID_PLAYER ? (Player*)mover : NULL;
 
     // ignore, waiting processing in WorldSession::HandleMoveWorldportAckOpcode and WorldSession::HandleMoveTeleportAck
@@ -374,27 +387,33 @@ void WorldSession::HandleForceSpeedChangeAckOpcodes(WorldPacket &recv_data)
     // Daemon TODO: enregistrement de cette position ?
     // Daemon: mise a jour de la vitesse pour les joueurs a cote.
     // Cf Unit::SetSpeedRate pour plus d'infos.
-    const uint16 SetSpeed2Opc_table[MAX_MOVE_TYPE][2] =
+    const uint16 SetSpeed2Opc_table[MAX_MOVE_TYPE][3] =
     {
-        {MSG_MOVE_SET_WALK_SPEED,       SMSG_FORCE_WALK_SPEED_CHANGE},
-        {MSG_MOVE_SET_RUN_SPEED,        SMSG_FORCE_RUN_SPEED_CHANGE},
-        {MSG_MOVE_SET_RUN_BACK_SPEED,   SMSG_FORCE_RUN_BACK_SPEED_CHANGE},
-        {MSG_MOVE_SET_SWIM_SPEED,       SMSG_FORCE_SWIM_SPEED_CHANGE},
-        {MSG_MOVE_SET_SWIM_BACK_SPEED,  SMSG_FORCE_SWIM_BACK_SPEED_CHANGE},
-        {MSG_MOVE_SET_TURN_RATE,        SMSG_FORCE_TURN_RATE_CHANGE},
+        {MSG_MOVE_SET_WALK_SPEED,       SMSG_FORCE_WALK_SPEED_CHANGE,       SMSG_SPLINE_SET_WALK_SPEED},
+        {MSG_MOVE_SET_RUN_SPEED,        SMSG_FORCE_RUN_SPEED_CHANGE,        SMSG_SPLINE_SET_RUN_SPEED},
+        {MSG_MOVE_SET_RUN_BACK_SPEED,   SMSG_FORCE_RUN_BACK_SPEED_CHANGE,   SMSG_SPLINE_SET_RUN_BACK_SPEED},
+        {MSG_MOVE_SET_SWIM_SPEED,       SMSG_FORCE_SWIM_SPEED_CHANGE,       SMSG_SPLINE_SET_SWIM_SPEED},
+        {MSG_MOVE_SET_SWIM_BACK_SPEED,  SMSG_FORCE_SWIM_BACK_SPEED_CHANGE,  SMSG_SPLINE_SET_SWIM_BACK_SPEED},
+        {MSG_MOVE_SET_TURN_RATE,        SMSG_FORCE_TURN_RATE_CHANGE,        SMSG_SPLINE_SET_TURN_RATE},
     };
-    WorldPacket data(SetSpeed2Opc_table[move_type][0], 31);
-    data << _player->GetMover()->GetPackGUID();
-    data << movementInfo;
-    data << float(newspeed);
-    _player->SendMovementMessageToSet(std::move(data), false);
 
-    if (!_player->GetMover()->movespline->Finalized())
+    if (!_player->IsTaxiFlying()) 
     {
-        WorldPacket splineData(SMSG_MONSTER_MOVE, 31);
-        splineData << _player->GetMover()->GetPackGUID();
-        Movement::PacketBuilder::WriteMonsterMove(*(_player->GetMover()->movespline), splineData);
-        _player->SendMovementMessageToSet(std::move(splineData), false);
+        // Maybe update movespeed using the spline packet. works for move splines
+        // and normal movement, but reverted due to issues in same changeset
+        WorldPacket data(SetSpeed2Opc_table[move_type][0], 31);
+        data << _player->GetMover()->GetPackGUID();
+        data << movementInfo;
+        data << float(newspeed);
+        _player->SendMovementMessageToSet(std::move(data), false);
+
+        if (!_player->GetMover()->movespline->Finalized())
+        {
+            WorldPacket splineData(SMSG_MONSTER_MOVE, 31);
+            splineData << _player->GetMover()->GetPackGUID();
+            Movement::PacketBuilder::WriteMonsterMove(*(_player->GetMover()->movespline), splineData);
+            _player->SendMovementMessageToSet(std::move(splineData), false);
+        }
     }
 }
 
@@ -412,6 +431,18 @@ void WorldSession::HandleSetActiveMoverOpcode(WorldPacket &recv_data)
         _clientMoverGuid = _player->GetMover()->GetObjectGuid();
         return;
     }
+
+    // mover swap after Eyes of the Beast, PetAI::UpdateAI handle the pet's return
+    if (_player->GetPetGuid() == _clientMoverGuid)
+        if (Pet* pet = _player->GetPet())
+        {
+            pet->clearUnitState(UNIT_STAT_CONTROLLED);
+            pet->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
+            // out of range pet dismissed
+            if (!pet->IsWithinDistInMap(_player, pet->GetMap()->GetGridActivationDistance()))
+                _player->RemovePet(PET_SAVE_REAGENTS);
+        }
+
     _clientMoverGuid = guid;
 }
 
@@ -427,7 +458,8 @@ void WorldSession::HandleMoveNotActiveMoverOpcode(WorldPacket &recv_data)
     recv_data >> mi;
     _clientMoverGuid = ObjectGuid();
 
-    if (_player->GetMover()->GetObjectGuid() == old_mover_guid)
+    // Client sent not active mover, but maybe the mover is actually set?
+    if (_player->GetMover() && _player->GetMover()->GetObjectGuid() == old_mover_guid)
     {
         DETAIL_LOG("HandleMoveNotActiveMover: incorrect mover guid: mover is %s and should be %s instead of %s",
                        _player->GetMover()->GetGuidStr().c_str(),
@@ -578,6 +610,7 @@ void WorldSession::HandleMoverRelocation(MovementInfo& movementInfo)
             GetPlayer()->GetCheatData()->OnTransport(plMover, movementInfo.GetTransportGuid());
             Unit* loadPetOnTransport = nullptr;
             if (!plMover->GetTransport())
+            {
                 if (Transport* t = plMover->GetMap()->GetTransport(movementInfo.GetTransportGuid()))
                 {
                     t->AddPassenger(plMover);
@@ -585,6 +618,11 @@ void WorldSession::HandleMoverRelocation(MovementInfo& movementInfo)
                         if (pet->GetTransport() != t)
                             loadPetOnTransport = pet;
                 }
+                // fix an 1.12 client problem with transports
+                plMover->SetJustBoarded(true);
+            }
+            else
+                plMover->SetJustBoarded(false);
             if (plMover->GetTransport())
             {
                 movementInfo.pos.x = movementInfo.GetTransportPos()->x;
@@ -624,7 +662,7 @@ void WorldSession::HandleMoverRelocation(MovementInfo& movementInfo)
         plMover->m_movementInfo = movementInfo;
 
         // super smart decision; rework required
-        if (ObjectGuid lootGuid = plMover->GetLootGuid())
+        if (ObjectGuid lootGuid = plMover->GetLootGuid() && !lootGuid.IsItem())
             plMover->SendLootRelease(lootGuid);
 
         // Nostalrius - antiundermap1
@@ -688,12 +726,26 @@ void WorldSession::HandleMoveTimeSkippedOpcode(WorldPacket & recv_data)
     uint32 lag;
     recv_data >> lag;
 
-    WorldPacket data(MSG_MOVE_TIME_SKIPPED, 12);
-    data << GetPlayer()->GetPackGUID();
-    data << lag;
-    GetPlayer()->m_movementInfo.time += lag;
-    GetPlayer()->m_movementInfo.ctime += lag;
-    GetPlayer()->SendMovementMessageToSet(std::move(data), false);
+    Player* pl = GetPlayer();
+
+    pl->m_movementInfo.time += lag;
+    pl->m_movementInfo.ctime += lag;
+
+    // fix an 1.12 client problem with transports
+    Transport* tr = pl->GetTransport();
+    if (pl->HasJustBoarded() && tr)
+    {
+        pl->SetJustBoarded(false);
+        tr->SendOutOfRangeUpdateToPlayer(pl);
+        tr->SendCreateUpdateToPlayer(pl);
+    }
+    else
+    {
+        WorldPacket data(MSG_MOVE_TIME_SKIPPED, 12);
+        data << pl->GetPackGUID();
+        data << lag;
+        pl->SendMovementMessageToSet(std::move(data), false);
+    }
 }
 
 void WorldSession::HandleFeatherFallAck(WorldPacket &recv_data)
@@ -749,7 +801,7 @@ void WorldSession::HandleMoveUnRootAck(WorldPacket& recv_data)
     if (!_player->GetCheatData()->HandleAnticheatTests(movementInfo, this, &recv_data))
         return;
 
-    // Position change
+    // Update position if it has changed (possible on UNROOT ack?)
     HandleMoverRelocation(movementInfo);
     _player->UpdateFallInformationIfNeed(movementInfo, recv_data.GetOpcode());
 
@@ -757,6 +809,8 @@ void WorldSession::HandleMoveUnRootAck(WorldPacket& recv_data)
     data << _player->GetPackGUID();
     movementInfo.Write(data);
     _player->SendMovementMessageToSet(std::move(data), true, _player);
+    
+    // Clear unit client state for brevity, though it should not be used
     _player->clearUnitState(UNIT_STAT_CLIENT_ROOT);
 }
 
@@ -786,11 +840,14 @@ void WorldSession::HandleMoveRootAck(WorldPacket& recv_data)
     // Position change
     HandleMoverRelocation(movementInfo);
     _player->UpdateFallInformationIfNeed(movementInfo, recv_data.GetOpcode());
-
+    
     WorldPacket data(MSG_MOVE_ROOT, recv_data.size());
     data << _player->GetPackGUID();
     movementInfo.Write(data);
     _player->SendMovementMessageToSet(std::move(data), true, _player);
+    
+    // Set unit client state for brevity, though it should not be used
+    _player->addUnitState(UNIT_STAT_CLIENT_ROOT);
 }
 
 void WorldSession::HandleMoveSplineDoneOpcode(WorldPacket& recv_data)

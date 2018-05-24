@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -1197,20 +1199,41 @@ namespace MaNGOS
 
     class AllCreaturesOfEntryInRange
     {
-        public:
-            AllCreaturesOfEntryInRange(const WorldObject* pObject, uint32 uiEntry, float fMaxRange) : m_pObject(pObject), m_uiEntry(uiEntry), m_fRange(fMaxRange) {}
-            bool operator() (Unit* pUnit)
-            {
-                if (pUnit->GetEntry() == m_uiEntry && m_pObject->IsWithinDist(pUnit,m_fRange,false))
+    public:
+        AllCreaturesOfEntryInRange(const WorldObject* pObject, uint32 uiEntry, float fMaxRange) : m_pObject(pObject), m_uiEntry(uiEntry), m_fRange(fMaxRange) {}
+        bool operator() (Unit* pUnit)
+        {
+            if (pUnit->GetEntry() == m_uiEntry && m_pObject->IsWithinDist(pUnit, m_fRange, false))
+                return true;
+
+            return false;
+        }
+
+    private:
+        const WorldObject* m_pObject;
+        uint32 m_uiEntry;
+        float m_fRange;
+    };
+
+    class AllCreaturesMatchingOneEntryInRange
+    {
+    public:
+        AllCreaturesMatchingOneEntryInRange(const WorldObject* pObject, const std::vector<uint32>& entries, float fMaxRange) 
+            : m_pObject(pObject), entries(entries), m_fRange(fMaxRange) {}
+        bool operator() (Unit* pUnit)
+        {
+            for (auto it = entries.cbegin(); it != entries.cend(); ++it) {
+                if (pUnit->GetEntry() == (*it) && m_pObject->IsWithinDist(pUnit, m_fRange, false)) {
                     return true;
-
-                return false;
+                }
             }
+            return false;
+        }
 
-        private:
-            const WorldObject* m_pObject;
-            uint32 m_uiEntry;
-            float m_fRange;
+    private:
+        const WorldObject* m_pObject;
+        std::vector<uint32> entries;
+        float m_fRange;
     };
 
     class PlayerAtMinimumRangeAway
@@ -1262,16 +1285,17 @@ namespace MaNGOS
         public:
             explicit NearestHostileUnitInAggroRangeCheck(Creature const* creature, bool useLOS = false) : _me(creature), _useLOS(useLOS)
             {
+                m_dist = 9999;
             }
             bool operator()(Unit* u)
             {
-                if (!u->IsHostileTo(_me))
+                if (!_me->IsHostileTo(u))
                     return false;
 
                 if (!u->isVisibleForOrDetect(_me, _me, false))
                     return false;
 
-                if (!u->IsWithinDistInMap(_me, _me->GetAttackDistance(u)))
+                if (!u->IsWithinDistInMap(_me, std::min(_me->GetAttackDistance(u), m_dist)))
                     return false;
 
                 if (!u->isTargetableForAttack())
@@ -1280,12 +1304,14 @@ namespace MaNGOS
                 if (_useLOS && !u->IsWithinLOSInMap(_me))
                     return false;
 
+                m_dist = _me->GetDistance(u);
                 return true;
             }
 
     private:
             Creature const* _me;
             bool _useLOS;
+            float m_dist;
             NearestHostileUnitInAggroRangeCheck(NearestHostileUnitInAggroRangeCheck const&);
     };
 

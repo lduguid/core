@@ -38,8 +38,8 @@ Transport::Transport() : GameObject(),
     _transportInfo(NULL), _isMoving(true), _pendingStop(false),
     _passengerTeleportItr(_passengers.begin()), _pathProgress(0)
 {
-    //m_updateFlag = UPDATEFLAG_TRANSPORT | UPDATEFLAG_LOWGUID | UPDATEFLAG_STATIONARY_POSITION | UPDATEFLAG_ROTATION;
-    m_updateFlag = (UPDATEFLAG_TRANSPORT | UPDATEFLAG_ALL | UPDATEFLAG_HAS_POSITION);
+    // the path progress is the only value that seem to matter
+    m_updateFlag = UPDATEFLAG_TRANSPORT;
 }
 
 Transport::~Transport()
@@ -127,27 +127,23 @@ void Transport::Update(uint32 diff, uint32)
 
     if (IsMoving() || !_pendingStop)
         _pathProgress = (_pathProgress + diff) % GetPeriod();
-    uint32 timer = (_pathProgress + _transportInfo->keyFrames[1].DepartureTime) % GetPeriod();
 
     // Set current waypoint
-    // Desired outcome: _currentFrame->DepartureTime < timer < _nextFrame->ArriveTime
+    // Desired outcome: _currentFrame->DepartureTime < _pathProgress < _nextFrame->ArriveTime
     // ... arrive | ... delay ... | departure
     //      event /         event /
     for (;;)
     {
-        if (timer >= _currentFrame->ArriveTime)
+        if (_pathProgress >= _currentFrame->ArriveTime && _pathProgress < _currentFrame->DepartureTime)
         {
-            if (timer < _currentFrame->DepartureTime)
-            {
-                SetMoving(false);
-                break;  // its a stop frame and we are waiting
-            }
+            SetMoving(false);
+            break;  // its a stop frame and we are waiting
         }
 
         // not waiting anymore
         SetMoving(true);
 
-        if (timer >= _currentFrame->DepartureTime && timer < _currentFrame->NextArriveTime)
+        if (_pathProgress >= _currentFrame->DepartureTime && _pathProgress < _currentFrame->NextArriveTime)
             break;  // found current waypoint
 
         MoveToNextWaypoint();
@@ -156,8 +152,15 @@ void Transport::Update(uint32 diff, uint32)
 
         // Departure event
         if (_currentFrame->IsTeleportFrame())
+        {
             if (TeleportTransport(_nextFrame->Node->mapid, _nextFrame->Node->x, _nextFrame->Node->y, _nextFrame->Node->z, _nextFrame->InitialOrientation))
                 return; // Update more in new map thread
+        }
+        else if (_currentFrame->IsUpdateFrame())
+        {
+            SendOutOfRangeUpdateToMap();
+            SendCreateUpdateToMap();
+        }
     }
 
     // Set position
@@ -165,9 +168,9 @@ void Transport::Update(uint32 diff, uint32)
     if (_positionChangeTimer.Passed())
     {
         _positionChangeTimer.Reset(positionUpdateDelay);
-        if (IsMoving())
+        if (IsMoving() && _pathProgress)
         {
-            float t = CalculateSegmentPos(float(timer) * 0.001f);
+            float t = CalculateSegmentPos(float(_pathProgress) * 0.001f);
             G3D::Vector3 pos, dir;
             _currentFrame->Spline->evaluate_percent(_currentFrame->Index, t, pos);
             _currentFrame->Spline->evaluate_derivative(_currentFrame->Index, t, dir);
@@ -190,8 +193,8 @@ void Transport::AddPassenger(WorldObject* passenger)
         if (!passenger->m_movementInfo.t_pos.x)
         {
             passenger->m_movementInfo.t_pos.x = passenger->GetPositionX();
-            passenger->m_movementInfo.t_pos.y = passenger->GetPositionX();
-            passenger->m_movementInfo.t_pos.z = passenger->GetPositionX();
+            passenger->m_movementInfo.t_pos.y = passenger->GetPositionY();
+            passenger->m_movementInfo.t_pos.z = passenger->GetPositionZ();
             passenger->m_movementInfo.t_pos.o = passenger->GetOrientation();
             CalculatePassengerOffset(passenger->m_movementInfo.t_pos.x, passenger->m_movementInfo.t_pos.y, passenger->m_movementInfo.t_pos.z, &passenger->m_movementInfo.t_pos.o);
         }
@@ -237,10 +240,9 @@ void Transport::MoveToNextWaypoint()
     // Set frames
     _currentFrame = _nextFrame++;
     if (_nextFrame == GetKeyFrames().end())
-    {
         _nextFrame = GetKeyFrames().begin();
+    if (_currentFrame == GetKeyFrames().begin())
         _pathProgress = 0;
-    }
 }
 
 float Transport::CalculateSegmentPos(float now)
@@ -288,10 +290,10 @@ bool Transport::TeleportTransport(uint32 newMapid, float x, float y, float z, fl
         WorldObject* obj = (*_passengerTeleportItr++);
 
         float destX, destY, destZ, destO;
-        destX = obj->m_movementInfo.GetTransportPos()->x;
-        destY = obj->m_movementInfo.GetTransportPos()->y;
-        destZ = obj->m_movementInfo.GetTransportPos()->z;
-        destO = obj->m_movementInfo.GetTransportPos()->o;
+        destX = obj->GetTransOffsetX();
+        destY = obj->GetTransOffsetY();
+        destZ = obj->GetTransOffsetZ();
+        destO = obj->GetTransOffsetO();
         CalculatePassengerPosition(destX, destY, destZ, &destO, x, y, z, o);
 
         switch (obj->GetTypeId())
@@ -318,43 +320,17 @@ bool Transport::TeleportTransport(uint32 newMapid, float x, float y, float z, fl
                     RemovePassenger(player);
                     break;
                 }
+
                 if (!player->isAlive())
                     player->ResurrectPlayer(1.0f);
+
                 player->RemoveSpellsCausingAura(SPELL_AURA_MOD_CONFUSE);
                 player->RemoveSpellsCausingAura(SPELL_AURA_MOD_FEAR);
                 player->CombatStopWithPets(true);
-                // MacOS user ? Teleport to next boat stop position
-                uint32 teleOptions = TELE_TO_NOT_LEAVE_TRANSPORT;
-                if (player->GetSession()->GetOS() == CLIENT_OS_MAC)
-                {
-                    // Find next pause waypoint
-                    KeyFrameVec::const_iterator nextFrame = _nextFrame;
-                    bool looped = false;
-                    while (true)
-                    {
-                        if (nextFrame == GetKeyFrames().end())
-                        {
-                            if (looped)
-                                break;
-                            looped = true;
-                            nextFrame = GetKeyFrames().begin();
-                            continue;
-                        }
-                        if (nextFrame->IsStopFrame() && nextFrame->Node->mapid == newMapid)
-                        {
-                            destX = nextFrame->Node->x;
-                            destY = nextFrame->Node->y;
-                            destZ = nextFrame->Node->z;
-                            destZ = newMap->GetTerrain()->GetWaterOrGroundLevel(destX, destZ, MAX_HEIGHT) + 30.0f;
-                            player->AddAura(130); // Feather fall
-                            teleOptions = 0;
-                            break;
-                        }
-                        ++nextFrame;
-                    }
-                }
-                if (!player->TeleportTo(newMapid, destX, destY, destZ, destO, teleOptions))
-                    RemovePassenger(player);
+
+                player->TeleportTo(newMapid, destX, destY, destZ, destO,
+                                   TELE_TO_NOT_LEAVE_TRANSPORT);
+
                 break;
             }
             case TYPEID_DYNAMICOBJECT:
@@ -367,6 +343,7 @@ bool Transport::TeleportTransport(uint32 newMapid, float x, float y, float z, fl
 
     Relocate(x, y, z, o);
     GetMap()->Add<Transport>(this);
+
     return newMap != oldMap;
 }
 
@@ -384,10 +361,10 @@ void Transport::UpdatePassengerPosition(WorldObject* passenger)
     // Do not use Unit::UpdatePosition here, we don't want to remove auras
     // as if regular movement occurred
     float x, y, z, o;
-    x = passenger->m_movementInfo.GetTransportPos()->x;
-    y = passenger->m_movementInfo.GetTransportPos()->y;
-    z = passenger->m_movementInfo.GetTransportPos()->z;
-    o = passenger->m_movementInfo.GetTransportPos()->o;
+    x = passenger->GetTransOffsetX();
+    y = passenger->GetTransOffsetY();
+    z = passenger->GetTransOffsetZ();
+    o = passenger->GetTransOffsetO();
     CalculatePassengerPosition(x, y, z, &o);
     if (!MaNGOS::IsValidMapCoord(x, y, z))
     {
@@ -406,6 +383,7 @@ void Transport::UpdatePassengerPosition(WorldObject* passenger)
             //relocate only passengers in world and skip any player that might be still logging in/teleporting
             if (passenger->IsInWorld())
                 GetMap()->PlayerRelocation(passenger->ToPlayer(), x, y, z, o);
+
             break;
         case TYPEID_GAMEOBJECT:
             //GetMap()->GameObjectRelocation(passenger->ToGameObject(), x, y, z, o, false);
@@ -432,4 +410,35 @@ void Transport::BuildUpdate(UpdateDataMapType& data_map)
         BuildUpdateDataForPlayer(itr->getSource(), data_map);
 
     ClearUpdateMask(true);
+}
+
+
+void Transport::SendOutOfRangeUpdateToMap()
+{
+    Map::PlayerList const& players = GetMap()->GetPlayers();
+    if (!players.isEmpty())
+    {
+        UpdateData data;
+        BuildOutOfRangeUpdateBlock(&data);
+        WorldPacket packet;
+        data.BuildPacket(&packet);
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+            if (itr->getSource()->GetTransport() != this)
+                itr->getSource()->SendDirectMessage(&packet);
+    }
+}
+
+void Transport::SendCreateUpdateToMap()
+{
+    Map::PlayerList const& players = GetMap()->GetPlayers();
+    if (!players.isEmpty())
+    {
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+            if (itr->getSource()->GetTransport() != this)
+            {
+                UpdateData data;
+                BuildCreateUpdateBlockForPlayer(&data, itr->getSource());
+                data.Send(itr->getSource()->GetSession());
+            }
+    }
 }

@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +23,7 @@
 #include "Creature.h"
 #include "DBCStores.h"
 #include "Spell.h"
+#include "Totem.h"
 
 CreatureAI::~CreatureAI()
 {
@@ -52,6 +55,19 @@ CanCastResult CreatureAI::CanCastSpell(Unit* pTarget, const SpellEntry *pSpell, 
         // Check for power (also done by Spell::CheckCast())
         if (m_creature->GetPower((Powers)pSpell->powerType) < Spell::CalculatePowerCost(pSpell, m_creature))
             return CAST_FAIL_POWER;
+    }
+
+    if (pSpell->Custom & SPELL_CUSTOM_FROM_BEHIND && pTarget->HasInArc(M_PI_F, m_creature))
+        return CAST_FAIL_OTHER;
+
+    // If the unit is disarmed and the skill requires a weapon, it cannot be cast
+    if (m_creature->HasWeapon() && !m_creature->CanUseEquippedWeapon(BASE_ATTACK))
+    {
+        for (int i = 0; i < MAX_EFFECT_INDEX; i++)
+        {
+            if (pSpell->Effect[i] == SPELL_EFFECT_WEAPON_DAMAGE || pSpell->Effect[i] == SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL)
+                return CAST_FAIL_OTHER;
+        }
     }
 
     if (pSpell->rangeIndex == SPELL_RANGE_IDX_SELF_ONLY)
@@ -247,6 +263,25 @@ bool CreatureAI::DoMeleeAttackIfReady()
     return m_creature->UpdateMeleeAttackingState();
 }
 
+struct EnterEvadeModeHelper
+{
+    explicit EnterEvadeModeHelper(Unit* _source) : source(_source) {}
+    void operator()(Unit* unit) const
+    {
+        if (unit->IsCreature() && unit->ToCreature()->IsTotem())
+            ((Totem*)unit)->UnSummon();
+        else
+        {
+            unit->GetMotionMaster()->Clear(false);
+            // for a controlled unit this will result in a follow move
+            unit->GetMotionMaster()->MoveTargetedHome();
+            unit->DeleteThreatList();
+            unit->CombatStop(true);
+        }
+    }
+    Unit* source;
+};
+
 void CreatureAI::EnterEvadeMode()
 {
     if (!m_creature->isAlive())
@@ -261,14 +296,15 @@ void CreatureAI::EnterEvadeMode()
     {
         m_creature->RemoveAurasAtReset();
 
-        // Remove ChaseMovementGenerator from MotionMaster stack list, and add HomeMovementGenerator instead
-        if (m_creature->GetMotionMaster()->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE)
-            m_creature->GetMotionMaster()->MoveTargetedHome();
+        // clear all movement generators except default
+        m_creature->GetMotionMaster()->Clear(false);
+        m_creature->GetMotionMaster()->MoveTargetedHome();
     }
 
     m_creature->DeleteThreatList();
     m_creature->CombatStop(true);
     m_creature->SetLootRecipient(nullptr);
+    m_creature->CallForAllControlledUnits(EnterEvadeModeHelper(m_creature), CONTROLLED_PET | CONTROLLED_GUARDIANS | CONTROLLED_CHARM | CONTROLLED_TOTEMS);
 }
 
 // Distract creature, if player gets too close while stealthed/prowling

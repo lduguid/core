@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,7 +31,7 @@
 #include "Policies/Singleton.h"
 #include "SharedDefines.h"
 #include "ace/Atomic_Op.h"
-#include "Nostalrius.h"
+#include "Commands/Nostalrius.h"
 #include "ObjectGuid.h"
 #include "MapNodes/AbstractPlayer.h"
 
@@ -118,6 +120,9 @@ enum eConfigUInt32Values
     CONFIG_UINT32_WHISP_DIFF_ZONE_MIN_LEVEL,
     CONFIG_UINT32_CHANNEL_INVITE_MIN_LEVEL,
     CONFIG_UINT32_WORLD_CHAN_MIN_LEVEL,
+    CONFIG_UINT32_SAY_EMOTE_MIN_LEVEL,
+    CONFIG_UINT32_SAY_MIN_LEVEL,
+    CONFIG_UINT32_YELL_MIN_LEVEL,
     CONFIG_UINT32_YELLRANGE_MIN,
     CONFIG_UINT32_YELLRANGE_LINEARSCALE_MAXLEVEL,
     CONFIG_UINT32_YELLRANGE_QUADRATICSCALE_MAXLEVEL,
@@ -252,6 +257,11 @@ enum eConfigUInt32Values
     CONFIG_UINT32_GUID_RESERVE_SIZE_CREATURE,
     CONFIG_UINT32_GUID_RESERVE_SIZE_GAMEOBJECT,
     CONFIG_UINT32_LONGCOMBAT,
+    CONFIG_UINT32_RESPEC_BASE_COST,
+    CONFIG_UINT32_RESPEC_MULTIPLICATIVE_COST,
+    CONFIG_UINT32_RESPEC_MIN_MULTIPLIER,
+    CONFIG_UINT32_RESPEC_MAX_MULTIPLIER,
+    CONFIG_UINT32_BATTLEGROUND_GROUP_LIMIT,
     CONFIG_UINT32_VALUE_COUNT
 };
 
@@ -374,7 +384,6 @@ enum eConfigBoolValues
     CONFIG_BOOL_GRID_UNLOAD = 0,
     CONFIG_BOOL_IS_MAPSERVER,
     CONFIG_BOOL_GMS_ALLOW_PUBLIC_CHANNELS,
-    CONFIG_BOOL_COLLISION_MODELS_UNLOAD,
     CONFIG_BOOL_GMTICKETS_ENABLE,
     CONFIG_BOOL_TAG_IN_BATTLEGROUNDS,
     CONFIG_BOOL_CONTINENTS_INSTANCIATE,
@@ -445,6 +454,10 @@ enum eConfigBoolValues
     CONFIG_BOOL_ENABLE_MOVEMENT_INTERP,
     CONFIG_BOOL_WHISPER_RESTRICTION,
     CONFIG_BOOL_MAILSPAM_ITEM,
+    CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS,
+    CONFIG_BOOL_ACCURATE_PVP_PURCHASE_REQUIREMENTS,
+    CONFIG_BOOL_ACCURATE_PVP_ZONE_REQUIREMENTS,
+    CONFIG_BOOL_BATTLEGROUND_RANDOMIZE,
     CONFIG_BOOL_VALUE_COUNT
 };
 
@@ -526,6 +539,7 @@ struct TransactionPart
     uint32 spell;
     uint16 itemsEntries[MAX_TRANSACTION_ITEMS];
     uint8 itemsCount[MAX_TRANSACTION_ITEMS];
+    uint32 itemsGuid[MAX_TRANSACTION_ITEMS];
 };
 
 struct PlayerTransactionData

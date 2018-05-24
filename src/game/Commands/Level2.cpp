@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -2476,6 +2478,57 @@ bool ChatHandler::HandleKickPlayerCommand(char *args)
     return true;
 }
 
+bool ChatHandler::HandleGroupInfoCommand(char* args)
+{
+    Player* target;
+    ObjectGuid target_guid;
+    std::string target_name;
+    if (!ExtractPlayerTarget(&args, &target, &target_guid, &target_name))
+        return false;
+
+    if (!target)
+    {
+        PSendSysMessage(LANG_NO_CHAR_SELECTED);
+        return false;
+    }
+
+    auto group = target->GetGroup();
+
+    if (!group)
+    {
+        std::string nameLink = GetNameLink(target);
+        PSendSysMessage(LANG_NOT_IN_GROUP, nameLink.c_str());
+        return false;
+    }
+
+    std::vector<std::string> names;
+
+    for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+    {
+        if (Player* player = itr->getSource())
+        {
+            names.emplace_back(player->GetName());
+        }
+    }
+
+    std::stringstream stream;
+
+    for (std::size_t i = 0, j = names.size(); i != j; ++i)
+    {
+        stream << names[i];
+		
+        if (i + 1 != j)
+        {
+            stream << ", ";
+        }
+    }
+
+    PSendSysMessage(LANG_GROUP_INFO, (group->isRaidGroup() ? "Raid" : "Party"),
+                    playerLink(std::to_string(group->GetId())).c_str(), playerLink(group->GetLeaderName()).c_str(),
+                    playerLink("Test").c_str(), group->GetMembersCount(), stream.str().c_str());
+    return true;
+}
+
 //show info of player
 bool ChatHandler::HandlePInfoCommand(char* args)
 {
@@ -2488,9 +2541,12 @@ bool ChatHandler::HandlePInfoCommand(char* args)
     uint8 race, class_;
     uint32 accId = 0;
     uint32 money = 0;
+    uint32 mail_gold_inbox = 0;
+    uint32 mail_gold_outbox = 0;
     uint32 total_player_time = 0;
     uint32 level = 0;
     uint32 latency = 0;
+    uint32 security_flag = 0;
     LocaleConstant loc = LOCALE_enUS;
 
     // get additional information from Player object
@@ -2508,6 +2564,7 @@ bool ChatHandler::HandlePInfoCommand(char* args)
         loc = target->GetSession()->GetSessionDbcLocale();
         race = target->getRace();
         class_ = target->getClass();
+
     }
     // get additional information from DB
     else
@@ -2517,7 +2574,8 @@ bool ChatHandler::HandlePInfoCommand(char* args)
             return false;
 
         //                                                     0          1      2      3        4     5
-        QueryResult *result = CharacterDatabase.PQuery("SELECT totaltime, level, money, account, race, class FROM characters WHERE guid = '%u'", target_guid.GetCounter());
+        std::unique_ptr<QueryResult> result(CharacterDatabase.PQuery("SELECT totaltime, level, money, account, race, class FROM characters WHERE guid = '%u'", target_guid.GetCounter()));
+
         if (!result)
             return false;
 
@@ -2528,8 +2586,23 @@ bool ChatHandler::HandlePInfoCommand(char* args)
         accId = fields[3].GetUInt32();
         race  = fields[4].GetUInt8();
         class_= fields[5].GetUInt8();
-        delete result;
     }
+
+    std::unique_ptr<QueryResult> result(CharacterDatabase.PQuery("SELECT SUM(money) FROM mail WHERE sender = %u", target_guid.GetCounter()));
+
+    if (!result)
+        return false;
+  
+    Field *fields = result->Fetch();
+    mail_gold_outbox = fields[0].GetUInt32();
+
+    result.reset(CharacterDatabase.PQuery("SELECT SUM(money) FROM mail WHERE receiver = %u", target_guid.GetCounter()));
+
+    if (!result)
+        return false;
+
+    fields = result->Fetch();
+    mail_gold_inbox = fields[0].GetUInt32();
 
     std::string username = GetMangosString(LANG_ERROR);
     std::string last_ip = GetMangosString(LANG_ERROR);
@@ -2537,18 +2610,21 @@ bool ChatHandler::HandlePInfoCommand(char* args)
     std::string last_login = GetMangosString(LANG_ERROR);
     const char* raceName = GetRaceName(race, GetSessionDbcLocale());
     const char* className = GetClassName(class_, GetSessionDbcLocale());
+
     if (!raceName)
         raceName = "";
     if (!className)
         className = "";
 
-    QueryResult* result = LoginDatabase.PQuery("SELECT username,last_ip,last_login,locale FROM account WHERE id = '%u'", accId);
+    result.reset(LoginDatabase.PQuery("SELECT username,last_ip,last_login,locale,locked FROM account WHERE id = '%u'", accId));
+
     if (result)
     {
         Field* fields = result->Fetch();
         username = fields[0].GetCppString();
         security = sAccountMgr.GetSecurity(accId);
         loc = LocaleConstant(fields[3].GetUInt8());
+        security_flag = fields[4].GetUInt8();
 
         bool showIp = true;
         if (GetAccessLevel() < security)
@@ -2565,24 +2641,29 @@ bool ChatHandler::HandlePInfoCommand(char* args)
             last_ip = "-";
             last_login = "-";
         }
-
-        delete result;
     }
 
     if (loc > LOCALE_esMX)
         loc = LOCALE_enUS;
 
     std::string nameLink = playerLink(target_name);
+    std::string two_factor_enabled = security_flag & 4? "Enabled" : "Disabled";
 
     PSendSysMessage(LANG_PINFO_ACCOUNT, raceName, className, (target ? "" : GetMangosString(LANG_OFFLINE)), nameLink.c_str(), target_guid.GetCounter(), playerLink(username).c_str(), accId, sAccountMgr.IsAccountBanned(accId) ? ", banned" : "",
                     security, playerLink(last_ip).c_str(), sAccountMgr.IsIPBanned(last_ip) ? " [BANIP]" : "", last_login.c_str(), latency,
-                    localeNames[loc]);
+                    localeNames[loc], two_factor_enabled.c_str());
 
     std::string timeStr = secsToTimeString(total_player_time, true, true);
     uint32 gold = money / GOLD;
     uint32 silv = (money % GOLD) / SILVER;
     uint32 copp = (money % GOLD) % SILVER;
-    PSendSysMessage(LANG_PINFO_LEVEL,  timeStr.c_str(), level, gold, silv, copp);
+    uint32 gold_in = mail_gold_inbox / GOLD;
+    uint32 silv_in = (mail_gold_inbox % GOLD) / SILVER;
+    uint32 copp_in = (mail_gold_inbox % GOLD) % SILVER;
+    uint32 gold_out = mail_gold_outbox / GOLD;
+    uint32 silv_out = (mail_gold_outbox % GOLD) / SILVER;
+    uint32 copp_out = (mail_gold_outbox % GOLD) % SILVER;
+    PSendSysMessage(LANG_PINFO_LEVEL,  timeStr.c_str(), level, gold, silv, copp, gold_in, silv_in, silv_out, gold_out, silv_out, copp_out);
     if (Guild* guild = sGuildMgr.GetPlayerGuild(target_guid))
         PSendSysMessage("Guild: %s", playerLink(guild->GetName()).c_str());
     return true;
@@ -3731,19 +3812,43 @@ bool ChatHandler::HandleCharacterHasItemCommand(char* args)
     if (!ExtractUInt32(&args, itemId))
         return false;
 
-    Player* pl = m_session->GetPlayer();
-    Player* plTarget = getSelectedPlayer();
-    if(!plTarget)
-        plTarget = pl;
+    Player* plTarget;
+    ObjectGuid target_guid;
+    std::string target_name;
 
-    if (ItemPrototype const* pItem = ObjectMgr::GetItemPrototype(itemId))
+    if (!ExtractPlayerTarget(&args, &plTarget, &target_guid, &target_name))
+        return false;
+
+    ItemPrototype const* pItem = ObjectMgr::GetItemPrototype(itemId);
+
+    if (!pItem)
     {
-        uint32 itemCount = plTarget->GetItemCount(itemId, true);
-        PSendSysMessage("%s's amount of %s (id %u) is: %u", GetNameLink(plTarget).c_str(), GetItemLink(pItem).c_str(), itemId, itemCount);
+        PSendSysMessage("Unknown item %u", itemId);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 itemCount = 0;
+
+    if (plTarget)
+    {
+        itemCount = plTarget->GetItemCount(itemId, true);
     }
     else
-        PSendSysMessage("Unknown item %u", itemId);
+    {
+        std::unique_ptr<QueryResult> result(CharacterDatabase.PQuery(
+            "SELECT SUM(count) AS item_count FROM item_instance ii WHERE itemEntry = %u and owner_guid = %u",
+            itemId, target_guid.GetCounter()
+        ));
 
+        if (result)
+        {
+            auto fields = result->Fetch();
+            itemCount = fields[0].GetUInt32();
+        }
+    }
+
+    PSendSysMessage("%s's amount of %s (id %u) is: %u", target_name.c_str(), GetItemLink(pItem).c_str(), itemId, itemCount);
     return true;
 }
 
@@ -4432,24 +4537,12 @@ bool ChatHandler::HandleLookupAccountEmailCommand(char* args)
 
 bool ChatHandler::HandleLookupAccountIpCommand(char* args)
 {
-    char* ipStr = ExtractQuotedOrLiteralArg(&args);
-    if (!ipStr)
-        return false;
+    return ShowAccountIpListHelper(args, false);
+}
 
-    uint32 limit;
-    if (!ExtractOptUInt32(&args, limit, 100))
-        return false;
-
-    std::string ip = ipStr;
-    LoginDatabase.escape_string(ip);
-
-    //                                                 0   1         2        3        4
-    uint32 minId = 100; // Don't show GM accounts
-    if (!m_session || m_session->GetSecurity() >= SEC_ADMINISTRATOR)
-        minId = 0;
-    QueryResult *result = LoginDatabase.PQuery("SELECT id, username, last_ip, 0, expansion FROM account WHERE id >= %u AND last_ip " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'"), minId, ip.c_str());
-
-    return ShowAccountListHelper(result, &limit);
+bool ChatHandler::HandleLookupAccountIponlineCommand(char* args)
+{
+    return ShowAccountIpListHelper(args, true);
 }
 
 bool ChatHandler::HandleLookupAccountNameCommand(char* args)
@@ -4469,6 +4562,28 @@ bool ChatHandler::HandleLookupAccountNameCommand(char* args)
     LoginDatabase.escape_string(account);
     //                                                 0   1         2        3        4
     QueryResult *result = LoginDatabase.PQuery("SELECT id, username, last_ip, 0, expansion FROM account WHERE username " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'"), account.c_str());
+
+    return ShowAccountListHelper(result, &limit);
+}
+
+bool ChatHandler::ShowAccountIpListHelper(char* args, bool onlineonly)
+{
+    char* ipStr = ExtractQuotedOrLiteralArg(&args);
+    if (!ipStr)
+        return false;
+
+    uint32 limit;
+    if (!ExtractOptUInt32(&args, limit, 100))
+        return false;
+
+    std::string ip = ipStr;
+    LoginDatabase.escape_string(ip);
+
+    const char *query = onlineonly
+        ? "SELECT id, username, last_ip, 0, expansion FROM account WHERE online = 1 AND last_ip " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'")
+        : "SELECT id, username, last_ip, 0, expansion FROM account WHERE                last_ip " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'");
+
+    QueryResult *result = LoginDatabase.PQuery(query, ip.c_str());
 
     return ShowAccountListHelper(result, &limit);
 }
@@ -4544,8 +4659,8 @@ bool ChatHandler::ShowAccountListHelper(QueryResult* result, uint32* limit, bool
 
 bool ChatHandler::HandleLookupPlayerIpCommand(char* args)
 {
-    char* ipOrNameStr = ExtractQuotedOrLiteralArg(&args);
-    if (!ipOrNameStr)
+    char* ipStr = ExtractQuotedOrLiteralArg(&args);
+    if (!ipStr)
         return false;
 
     uint32 limit;
@@ -4553,20 +4668,9 @@ bool ChatHandler::HandleLookupPlayerIpCommand(char* args)
         return false;
 
     QueryResult* result = NULL;
-    std::string ip = ipOrNameStr;
-    uint32 minId = GetAccessLevel() < SEC_ADMINISTRATOR ? 100 : 0; // Don't show GM accounts
-    std::string normalizedName = ipOrNameStr;
-    if (normalizePlayerName(normalizedName))
-        if (PlayerCacheData const* data = sObjectMgr.GetPlayerDataByName(normalizedName))
-            if (result = LoginDatabase.PQuery("SELECT id, last_ip FROM account WHERE id >= %u AND id = %u", minId, data->uiAccount))
-            {
-                Field* fields = result->Fetch();
-                ip = fields[1].GetCppString();
-                delete result;
-            }
-
+    std::string ip = ipStr;
     LoginDatabase.escape_string(ip);
-    result = LoginDatabase.PQuery("SELECT id, username FROM account WHERE id >= %u AND last_ip " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'"), minId, ip.c_str());
+    result = LoginDatabase.PQuery("SELECT id, username FROM account WHERE last_ip " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'"), ip.c_str());
 
     return LookupPlayerSearchCommand(result, &limit);
 }
@@ -4610,6 +4714,64 @@ bool ChatHandler::HandleLookupPlayerEmailCommand(char* args)
     return LookupPlayerSearchCommand(result, &limit);
 }
 
+bool ChatHandler::HandleLookupPlayerNameCommand(char* args)
+{
+    char* nameStr = ExtractQuotedOrLiteralArg(&args);
+    if (!nameStr)
+        return false;
+
+    uint32 limit;
+    if (!ExtractOptUInt32(&args, limit, 100))
+        return false;
+
+    uint32 limit_original = limit;
+    std::string name = nameStr;
+    LoginDatabase.escape_string(name);
+
+    QueryResult* chars = CharacterDatabase.PQuery("SELECT guid, name, race, class, level FROM characters WHERE name " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'"), name.c_str());
+    if (chars)
+    {
+        if (chars->GetRowCount())
+            ShowPlayerListHelper(chars, &limit, true, true);
+        else
+            delete chars;
+    }
+
+    return true;
+}
+
+bool ChatHandler::HandleLookupPlayerCharacterCommand(char* args)
+{
+    char* nameStr = ExtractQuotedOrLiteralArg(&args);
+    if (!nameStr)
+        return false;
+
+    uint32 limit;
+    if (!ExtractOptUInt32(&args, limit, 100))
+        return false;
+
+    QueryResult* result = NULL;
+    std::string normalizedName = nameStr;
+    if (normalizePlayerName(normalizedName))
+        if (PlayerCacheData const* data = sObjectMgr.GetPlayerDataByName(normalizedName))
+            if (result = LoginDatabase.PQuery("SELECT id, last_ip FROM account WHERE id = %u", data->uiAccount))
+            {
+                Field* fields = result->Fetch();
+                uint32 id = fields[0].GetInt32();
+                std::string ip = fields[1].GetCppString();
+                delete result;
+
+                AccountTypes security = sAccountMgr.GetSecurity(id);
+                if (GetAccessLevel() < security || (GetAccessLevel() < SEC_ADMINISTRATOR && security > SEC_PLAYER))
+                    return LookupPlayerSearchCommand(NULL, &limit);
+
+                LoginDatabase.escape_string(ip);
+                result = LoginDatabase.PQuery("SELECT id, username FROM account WHERE last_ip " _LIKE_ " " _CONCAT3_("'%%'", "'%s'", "'%%'"), ip.c_str());
+            }
+
+    return LookupPlayerSearchCommand(result, &limit);
+}
+
 bool ChatHandler::LookupPlayerSearchCommand(QueryResult* result, uint32* limit)
 {
     if (!result)
@@ -4641,6 +4803,10 @@ bool ChatHandler::LookupPlayerSearchCommand(QueryResult* result, uint32* limit)
         {
             if (chars->GetRowCount())
             {
+                AccountTypes security = sAccountMgr.GetSecurity(acc_id);
+                if (GetAccessLevel() < security || (GetAccessLevel() < SEC_ADMINISTRATOR && security > SEC_PLAYER))
+                    continue;
+
                 bool banned = sAccountMgr.IsAccountBanned(acc_id);
                 if (banned)
                     acc_name = acc_name + " [BANNED]";

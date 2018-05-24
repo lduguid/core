@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -97,7 +99,7 @@ void LootStore::LoadLootTable()
     sLog.outString("%s :", GetName());
 
     //                                                 0      1     2                    3        4              5         6
-    QueryResult* result = WorldDatabase.PQuery("SELECT entry, item, ChanceOrQuestChance, groupid, mincountOrRef, maxcount, condition_id FROM %s", GetName());
+    QueryResult* result = WorldDatabase.PQuery("SELECT entry, item, ChanceOrQuestChance, groupid, mincountOrRef, maxcount, condition_id FROM %s WHERE (mincountOrRef < 0) || (item NOT IN (SELECT entry FROM forbidden_items WHERE (AfterOrBefore = 0 && patch <= %u) || (AfterOrBefore = 1 && patch >= %u)))", GetName(), sWorld.GetWowPatch(), sWorld.GetWowPatch());
 
     if (result)
     {
@@ -701,14 +703,14 @@ void Loot::generateMoneyLoot(uint32 minAmount, uint32 maxAmount)
     }
 }
 
-LootItem* Loot::LootItemInSlot(uint32 lootSlot, Player* player, QuestItem **qitem, QuestItem **ffaitem, QuestItem **conditem)
+LootItem* Loot::LootItemInSlot(uint32 lootSlot, uint32 playerGuid, QuestItem **qitem, QuestItem **ffaitem, QuestItem **conditem)
 {
     LootItem* item = NULL;
     bool is_looted = true;
     if (lootSlot >= items.size())
     {
         uint32 questSlot = lootSlot - items.size();
-        QuestItemMap::const_iterator itr = m_playerQuestItems.find(player->GetGUIDLow());
+        QuestItemMap::const_iterator itr = m_playerQuestItems.find(playerGuid);
         if (itr != m_playerQuestItems.end() && questSlot < itr->second->size())
         {
             QuestItem *qitem2 = &itr->second->at(questSlot);
@@ -724,7 +726,7 @@ LootItem* Loot::LootItemInSlot(uint32 lootSlot, Player* player, QuestItem **qite
         is_looted = item->is_looted;
         if (item->freeforall)
         {
-            QuestItemMap::const_iterator itr = m_playerFFAItems.find(player->GetGUIDLow());
+            QuestItemMap::const_iterator itr = m_playerFFAItems.find(playerGuid);
             if (itr != m_playerFFAItems.end())
             {
                 for (QuestItemList::const_iterator iter = itr->second->begin(); iter != itr->second->end(); ++iter)
@@ -740,7 +742,7 @@ LootItem* Loot::LootItemInSlot(uint32 lootSlot, Player* player, QuestItem **qite
         }
         else if (item->conditionId && !is_looted)
         {
-            QuestItemMap::const_iterator itr = m_playerNonQuestNonFFAConditionalItems.find(player->GetGUIDLow());
+            QuestItemMap::const_iterator itr = m_playerNonQuestNonFFAConditionalItems.find(playerGuid);
             if (itr != m_playerNonQuestNonFFAConditionalItems.end())
             {
                 for (QuestItemList::const_iterator iter = itr->second->begin(); iter != itr->second->end(); ++iter)
@@ -764,9 +766,9 @@ LootItem* Loot::LootItemInSlot(uint32 lootSlot, Player* player, QuestItem **qite
     return item;
 }
 
-uint32 Loot::GetMaxSlotInLootFor(Player* player) const
+uint32 Loot::GetMaxSlotInLootFor(uint32 playerGuid) const
 {
-    QuestItemMap::const_iterator itr = m_playerQuestItems.find(player->GetGUIDLow());
+    QuestItemMap::const_iterator itr = m_playerQuestItems.find(playerGuid);
     return items.size() + (itr != m_playerQuestItems.end() ?  itr->second->size() : 0);
 }
 
@@ -883,8 +885,7 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
     }
 
     // in next cases used same slot type for all items
-    //LootSlotType slot_type = LOOT_SLOT_TYPE_ALLOW_LOOT;
-    LootSlotType slot_type = lv.permission == OWNER_PERMISSION ? LOOT_SLOT_TYPE_ALLOW_LOOT : LOOT_SLOT_TYPE_LOCKED;
+    LootSlotType slot_type = LOOT_SLOT_TYPE_ALLOW_LOOT;
 
     QuestItemMap const& lootPlayerQuestItems = l.GetPlayerQuestItems();
     QuestItemMap::const_iterator q_itr = lootPlayerQuestItems.find(lv.viewer->GetGUIDLow());
@@ -1054,6 +1055,8 @@ LootStoreItem const * LootTemplate::LootGroup::Roll(Loot const& loot) const
                     continue;
                 Team conditionTeam = condition->GetTeam();
                 if ((conditionTeam == ALLIANCE || conditionTeam == HORDE) && conditionTeam != loot.GetTeam())
+                    continue;
+                if (!condition->CheckPatch())
                     continue;
             }
             indexesOk.push_back(i);

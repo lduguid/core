@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -87,7 +89,7 @@ void SpellModMgr::LoadSpellMods()
                               "Attributes, AttributesEx, AttributesEx2, AttributesEx3, AttributesEx4, "
                               "InterruptFlags, AuraInterruptFlags, ChannelInterruptFlags, Dispel, "
                               "Stances, StancesNot, SpellVisual, ManaCostPercentage, StartRecoveryCategory, StartRecoveryTime, MaxTargetLevel, MaxAffectedTargets, DmgClass, "
-                              "rangeIndex, RecoveryTime, CategoryRecoveryTime, procCharges, SpellFamilyName, SpellFamilyFlags "
+                              "rangeIndex, RecoveryTime, CategoryRecoveryTime, procCharges, SpellFamilyName, SpellFamilyFlags, Mechanic "
                               "FROM spell_mod");
     uint32 total_count = 0;
     if (!result)
@@ -131,9 +133,17 @@ void SpellModMgr::LoadSpellMods()
                     {
                         OUT_ERR("Impossible de charger le sort %u. Passe.", spellid);
                         delete newSpell;
+
+                        for (uint32 i = 0; i < 8; ++i)
+                            delete[] loader->SpellName[i];
+
                         delete loader;
                         continue;
                     }
+
+                    for (uint32 i = 0; i < 8; ++i)
+                        delete[] loader->SpellName[i];
+
                     delete loader;
                 }
             }
@@ -196,12 +206,13 @@ void SpellModMgr::LoadSpellMods()
             ModUInt32ValueIfExplicit(fields[31], spell->CategoryRecoveryTime);
             ModUInt32ValueIfExplicit(fields[32], spell->procCharges);
 
-            // 33               34
-            // SpellFamilyName, SpellFamilyFlags
+            // 33               34                35
+            // SpellFamilyName, SpellFamilyFlags, Mechanic
             ModUInt32ValueIfExplicit(fields[33], spell->SpellFamilyName);
             uint64 flags = fields[34].GetUInt64();
             if (flags)
                 spell->SpellFamilyFlags.Flags = flags;
+            ModUInt32ValueIfExplicit(fields[35], spell->Mechanic);
 
             spell->InitCachedValues();
             ++total_count;

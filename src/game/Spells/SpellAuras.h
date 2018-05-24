@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -64,6 +66,7 @@ class MANGOS_DLL_SPEC SpellAuraHolder
         void CleanupTriggeredSpells();
 
         void setDiminishGroup(DiminishingGroup group) { m_AuraDRGroup = group; }
+        void setDiminishLevel(DiminishingLevels level) { m_AuraDRLevel = level; }
         DiminishingGroup getDiminishGroup() const { return m_AuraDRGroup; }
 
         uint32 GetStackAmount() const { return m_stackAmount; }
@@ -71,6 +74,7 @@ class MANGOS_DLL_SPEC SpellAuraHolder
         bool ModStackAmount(int32 num); // return true if last charge dropped
 
         Aura* GetAuraByEffectIndex(SpellEffectIndex index) const { return m_auras[index]; }
+        uint32 GetAuraPeriodicTickTimer(SpellEffectIndex index) const;
 
         uint32 GetId() const { return m_spellProto->Id; }
         SpellEntry const* GetSpellProto() const { return m_spellProto; }
@@ -90,15 +94,13 @@ class MANGOS_DLL_SPEC SpellAuraHolder
         // Debuff limit
         void CalculateForDebuffLimit();
         bool IsAffectedByDebuffLimit() const { return m_debuffLimitAffected; }
+        void SetAffectedByDebuffLimit(bool isAffectedByDebuffLimit);
         bool IsMoreImportantDebuffThan(SpellAuraHolder *other) const;
         bool m_debuffLimitAffected;
         uint32 m_debuffLimitScore; // + haut => + important
         // Refresh de buff
         void Refresh(Unit* caster, Unit* target, SpellAuraHolder* pRefreshWithAura);
         bool CanBeRefreshedBy(SpellAuraHolder* other) const;
-        // Proc de buff
-        uint32 spellFirstHitAttackerProcFlags;
-        uint32 spellFirstHitTargetProcFlags;
         // FIN NOSTALRIUS
 
         bool IsPermanent() const { return m_permanent; }
@@ -132,15 +134,17 @@ class MANGOS_DLL_SPEC SpellAuraHolder
         void UpdateHolder(uint32 diff) { SetInUse(true); Update(diff); SetInUse(false); }
         void Update(uint32 diff);
         void RefreshHolder();
+        void RefreshAuraPeriodicTimers(uint32 duration = 0);
 
         bool IsSingleTarget() const { return m_isSingleTarget; }
         void SetIsSingleTarget(bool val) { m_isSingleTarget = val; }
+        bool IsChanneled() { return m_isChanneled; }
         void UnregisterSingleCastHolder();
 
         int32 GetAuraMaxDuration() const { return m_maxDuration; }
         void SetAuraMaxDuration(int32 duration);
         int32 GetAuraDuration() const { return m_duration; }
-        void SetAuraDuration(int32 duration) { m_duration = duration; }
+        void SetAuraDuration(int32 duration) { m_duration = duration; };
 
         uint8 GetAuraSlot() const { return m_auraSlot; }
         void SetAuraSlot(uint8 slot) { m_auraSlot = slot; }
@@ -168,6 +172,7 @@ class MANGOS_DLL_SPEC SpellAuraHolder
         time_t GetAuraApplyTime() const { return m_applyTime; }
 
         void SetRemoveMode(AuraRemoveMode mode) { m_removeMode = mode; }
+        AuraRemoveMode GetRemoveMode() const { return m_removeMode; }
         void SetLoadedState(ObjectGuid const& casterGUID, ObjectGuid const& itemGUID, uint32 stackAmount, uint32 charges, int32 maxduration, int32 duration)
         {
             m_casterGuid   = casterGUID;
@@ -214,6 +219,7 @@ class MANGOS_DLL_SPEC SpellAuraHolder
 
         AuraRemoveMode m_removeMode:8;                      // Store info for know remove aura reason
         DiminishingGroup m_AuraDRGroup:8;                   // Diminishing
+        DiminishingLevels m_AuraDRLevel:8;
 
         bool m_permanent:1;
         bool m_isPassive:1;
@@ -221,6 +227,7 @@ class MANGOS_DLL_SPEC SpellAuraHolder
         bool m_isRemovedOnShapeLost:1;
         bool m_isSingleTarget:1;                            // true if it's a single target spell and registered at caster - can change at spell steal for example
         bool m_deleted:1;
+        bool m_isChanneled:1;
         bool m_makesTargetSecondaryFocus;
         bool m_spellTriggered;                              // applied by a triggered spell (used in debuff priority computation)
 
@@ -403,6 +410,7 @@ class MANGOS_DLL_SPEC Aura
         int32 GetAuraDuration() const { return GetHolder()->GetAuraDuration(); }
         time_t GetAuraApplyTime() const { return m_applyTime; }
         uint32 GetAuraTicks() const { return m_periodicTick; }
+        uint32 GetAuraPeriodicTimer() const { return m_periodicTimer; }
         uint32 GetAuraMaxTicks() const
         {
             int32 maxDuration = GetAuraMaxDuration();
@@ -425,6 +433,7 @@ class MANGOS_DLL_SPEC Aura
         bool IsAreaAura() const { return m_isAreaAura; }
         bool IsPeriodic() const { return m_isPeriodic; }
         bool IsInUse() const { return m_in_use; }
+        bool IsChanneled() const { return GetHolder()->IsChanneled(); }
         // NOSTALRIUS
         void SetPositive(bool pos) { m_positive = pos; }
         void SetPersistent(bool on) { m_isPersistent = on; }
@@ -456,10 +465,14 @@ class MANGOS_DLL_SPEC Aura
         // NOSTALRIUS: Ajout de 'skipCheckExclusive'
         void ApplyModifier(bool apply, bool Real = false, bool skipCheckExclusive = false);
 
+        void UpdatePeriodicTimer(int32 duration);
         void UpdateAura(uint32 diff) { SetInUse(true); Update(diff); SetInUse(false); }
+        // Called only in Aura::Update, for area aura owners to update affected targets
+        virtual void UpdateForAffected(uint32 diff);
         void Refresh(Unit* caster, Unit* target, SpellAuraHolder* pRefreshWithHolder);
 
         void SetRemoveMode(AuraRemoveMode mode) { m_removeMode = mode; }
+        AuraRemoveMode GetRemoveMode() const { return m_removeMode;  }
 
         virtual Unit* GetTriggerTarget() const { return m_spellAuraHolder->GetTarget(); }
 
@@ -522,6 +535,7 @@ class MANGOS_DLL_SPEC AreaAura : public Aura
         ~AreaAura();
     protected:
         void Update(uint32 diff);
+        void UpdateForAffected(uint32 diff);
     private:
         float m_radius;
         AreaAuraType m_areaAuraType;

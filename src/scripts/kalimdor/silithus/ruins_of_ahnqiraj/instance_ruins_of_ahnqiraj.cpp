@@ -533,7 +533,7 @@ struct instance_ruins_of_ahnqiraj : public ScriptedInstance
             if (m_auiEncounter[i] == IN_PROGRESS || m_auiEncounter[i] > SPECIAL)           // Do not load an encounter as "In Progress" - reset it instead.
                 m_auiEncounter[i] = NOT_STARTED;
 
-        if (m_auiEncounter[TYPE_GENERAL_ANDOROV] = DONE)
+        if (m_auiEncounter[TYPE_GENERAL_ANDOROV] == DONE)
             m_auiEncounter[TYPE_GENERAL_ANDOROV] = NOT_STARTED;
 
         OUT_LOAD_INST_DATA_COMPLETE;
@@ -606,11 +606,17 @@ struct instance_ruins_of_ahnqiraj : public ScriptedInstance
     void SetAndorovSquadFaction(uint32 faction)
     {
         if (Creature* pAndorov = instance->GetCreature(m_uiAndorovGUID))
+        {
             pAndorov->setFaction(faction);
+            pAndorov->SetPvP(true);
+        }
         for (std::list<uint64>::iterator it = m_lKaldoreiElites.begin(); it != m_lKaldoreiElites.end(); ++it)
         {
             if (Creature* pElite = instance->GetCreature(*it))
+            {
                 pElite->setFaction(faction);
+                pElite->SetPvP(true);
+            }
         }
     }
 

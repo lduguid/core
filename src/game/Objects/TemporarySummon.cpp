@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -139,6 +141,57 @@ void TemporarySummon::Update(uint32 update_diff,  uint32 diff)
             }
             else if (m_timer != m_lifetime)
                 m_timer = m_lifetime;
+            break;
+        }
+        case TEMPSUMMON_TIMED_COMBAT_OR_CORPSE_DESPAWN:
+        {
+            if (isDead())
+            {
+                UnSummon();
+                return;
+            }
+            if (m_timer <= update_diff)
+            {
+                if (!isInCombat())
+                {
+                    UnSummon();
+                    return;
+                }
+                else
+                    m_timer = 0;
+            }
+            else
+                m_timer -= update_diff;
+            break;
+        }
+        case TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN:
+        {
+            if (IsDespawned())
+            {
+                UnSummon();
+                return;
+            }
+
+            // Reset timer when the mob dies
+            if (!isAlive() && !m_justDied)
+            {
+                m_justDied = true;
+                m_timer = m_lifetime;
+            }
+
+            if (m_timer <= update_diff)
+            {
+                // Prevent despawn while the mob is still in combat
+                if (!isInCombat())
+                {
+                    UnSummon();
+                    return;
+                }
+                else
+                    m_timer = 0;
+            }
+            else
+                m_timer -= update_diff;
             break;
         }
         default:

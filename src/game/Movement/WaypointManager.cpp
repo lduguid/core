@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -139,7 +141,7 @@ void WaypointManager::Load()
             node.script_id      = fields[6].GetUInt32();
 
             // prevent using invalid coordinates
-            if (!MaNGOS::IsValidMapCoord(node.x, node.y, node.z, node.orientation))
+            if (!MaNGOS::IsValidMapCoord(node.x, node.y, node.z, node.orientation == 100.0f ? 0.0f : node.orientation))
             {
                 QueryResult *result1 = WorldDatabase.PQuery("SELECT id, map FROM creature WHERE guid = '%u'", id);
                 if (result1)
@@ -312,7 +314,7 @@ void WaypointManager::Load()
             node.script_id      = fields[6].GetUInt32();
 
             // prevent using invalid coordinates
-            if (!MaNGOS::IsValidMapCoord(node.x, node.y, node.z, node.orientation))
+            if (!MaNGOS::IsValidMapCoord(node.x, node.y, node.z, node.orientation == 100.0f ? 0.0f : node.orientation))
             {
                 sLog.outErrorDb("Table creature_movement_template for entry %u (point %u) are using invalid coordinates position_x: %f, position_y: %f)",
                                 entry, point, node.x, node.y);

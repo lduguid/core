@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -254,11 +256,12 @@ void DungeonPersistentState::SaveToDB()
     CharacterDatabase.PExecute("INSERT INTO instance VALUES ('%u', '%u', '" UI64FMTD "', '%s')", GetInstanceId(), GetMapId(), (uint64)GetResetTimeForDB(), data.c_str());
 }
 
-void DungeonPersistentState::DeleteRespawnTimes()
+void DungeonPersistentState::DeleteRespawnTimesAndData()
 {
     CharacterDatabase.BeginTransaction();
     CharacterDatabase.PExecute("DELETE FROM creature_respawn WHERE instance = '%u'", GetInstanceId());
     CharacterDatabase.PExecute("DELETE FROM gameobject_respawn WHERE instance = '%u'", GetInstanceId());
+    CharacterDatabase.PExecute("UPDATE instance SET data = '' WHERE id = '%u'", GetInstanceId());
     CharacterDatabase.CommitTransaction();
 
     ClearRespawnTimes();                                    // state can be deleted at call if only respawn data prevent unload
@@ -266,7 +269,7 @@ void DungeonPersistentState::DeleteRespawnTimes()
 
 void DungeonPersistentState::DeleteFromDB()
 {
-    MapPersistentStateManager::DeleteInstanceFromDB(GetInstanceId());
+    MapPersistentStateManager::DeleteInstanceFromDB(GetMapId(), GetInstanceId());
 }
 
 time_t DungeonPersistentState::GetResetTimeForDB() const
@@ -308,37 +311,45 @@ time_t DungeonResetScheduler::CalculateNextResetTime(MapEntry const* temp, time_
 void DungeonResetScheduler::LoadResetTimes()
 {
     time_t now = time(NULL);
-    time_t today = (now / DAY) * DAY;
-
     // NOTE: Use DirectPExecute for tables that will be queried later
 
     // get the current reset times for normal instances (these may need to be updated)
     // these are only kept in memory for InstanceSaves that are loaded later
     // resettime = 0 in the DB for raid instances so those are skipped
-    typedef std::map<uint32, std::pair<uint32, time_t> > ResetTimeMapType;
+
+    // NOTE: We _CANNOT_ schedule normal dungeon resets here, since the instance IDs
+    // are remapped in PackInstances(). Scheduling normal dungeon resets here leads
+    // to raid dungeons being reset if the raid ID is remapped to that of a normal
+    // dungeon. This leads to further issues with players being allocated lockouts
+    // for random dungeons as we allocate the cleared IDs for future instances, since
+    // the player bindings will remain due to the wrong mapid being reset.
+    // _____BAD_____
     ResetTimeMapType InstResetTime;
 
-    QueryResult *result = CharacterDatabase.Query("SELECT id, map, resettime FROM instance WHERE resettime > 0");
+    QueryResult *result = CharacterDatabase.Query("SELECT id, map, resettime FROM instance");
     if (result)
     {
         do
         {
             Field* fields = result->Fetch();
-            if (time_t resettime = time_t(fields[2].GetUInt64()))
+            uint32 id = fields[0].GetUInt32();
+            uint32 mapid = fields[1].GetUInt32();
+            time_t resettime = time_t(fields[2].GetUInt64());
+
+            MapEntry const* mapEntry = sMapStorage.LookupEntry<MapEntry>(mapid);
+
+            if (!mapEntry || !mapEntry->IsDungeon())
             {
-                uint32 id = fields[0].GetUInt32();
-                uint32 mapid = fields[1].GetUInt32();
-
-                MapEntry const* mapEntry = sMapStorage.LookupEntry<MapEntry>(mapid);
-
-                if (!mapEntry || !mapEntry->IsDungeon())
-                {
-                    sMapPersistentStateMgr.DeleteInstanceFromDB(id);
-                    continue;
-                }
-
-                InstResetTime[id] = std::pair<uint32, uint64>(mapid, resettime);
+                sMapPersistentStateMgr.DeleteInstanceFromDB(mapid, id);
+                continue;
             }
+
+            // Don't set or update reset time for raid instances
+            if (mapEntry->IsRaid())
+                continue;
+
+            InstResetTime[id] = std::pair<uint32, uint64>(mapid,
+                resettime ? resettime : now + 2 * HOUR);
         }
         while (result->NextRow());
         delete result;
@@ -362,11 +373,6 @@ void DungeonResetScheduler::LoadResetTimes()
             while (result->NextRow());
             delete result;
         }
-
-        // schedule the reset times
-        for (ResetTimeMapType::iterator itr = InstResetTime.begin(); itr != InstResetTime.end(); ++itr)
-            if (itr->second.second > now)
-                ScheduleReset(true, itr->second.second, DungeonResetEvent(RESET_EVENT_NORMAL_DUNGEON, itr->second.first, itr->first));
     }
 
     // load the global respawn times for raid instances
@@ -404,7 +410,47 @@ void DungeonResetScheduler::LoadResetTimes()
     // clean expired instances, references to them will be deleted in CleanupInstances
     // must be done before calculating new reset times
     m_InstanceSaves._CleanupExpiredInstancesAtTime(now);
+}
 
+void DungeonResetScheduler::ScheduleAllDungeonResets()
+{
+    ResetTimeMapType InstResetTime;
+
+    time_t now = time(nullptr);
+    time_t today = (now / DAY) * DAY;
+
+    // Reset times have already been updated and set in LoadResetTimes(). We just need to start
+    // the initial reset events based on them. Since LoadResetTimes() is called before
+    // PackInstances(), it cannot be done there.
+    QueryResult *result = CharacterDatabase.Query("SELECT id, map, resettime FROM instance");
+    if (result)
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 id = fields[0].GetUInt32();
+            uint32 mapid = fields[1].GetUInt32();
+            time_t resettime = time_t(fields[2].GetUInt64());
+
+            // Raids or other maps with a global reset timer
+            if (!resettime)
+                continue;
+
+            InstResetTime[id] = std::pair<uint32, time_t>(mapid, resettime);
+        } while (result->NextRow());
+        delete result;
+    }
+
+    for (ResetTimeMapType::iterator itr = InstResetTime.begin(); itr != InstResetTime.end(); ++itr)
+    {
+        ScheduleReset(true, itr->second.second, DungeonResetEvent(RESET_EVENT_NORMAL_DUNGEON, itr->second.first, itr->first));
+
+        if (now > itr->second.second)
+            sLog.outInfo("[DungeonReset] Instance %u (map %u) has reset time before now, but was not cleaned up. Likely expired during load",
+                itr->first, itr->second.first);
+    }
+
+    uint32 diff = sWorld.getConfig(CONFIG_UINT32_INSTANCE_RESET_TIME_HOUR) * HOUR;
     // calculate new global reset times for expired instances and those that have never been reset yet
     // add the global reset times to the priority queue
     for (auto itr = sMapStorage.begin<MapEntry>(); itr < sMapStorage.end<MapEntry>(); ++itr)
@@ -558,7 +604,13 @@ MapPersistentStateManager::~MapPersistentStateManager()
 MapPersistentState* MapPersistentStateManager::AddPersistentState(MapEntry const* mapEntry, uint32 instanceId, time_t resetTime, bool canReset, bool load /*=false*/, bool initPools /*= true*/)
 {
     if (MapPersistentState *old_save = GetPersistentState(mapEntry->id, instanceId))
+    {
+        if (instanceId && old_save->GetMapId() != mapEntry->id)
+            sLog.outError("MapPersistentStateManager::AddPersistentState: instance %u has existing map ID '%u', but map to add for is '%u'. Mismatched states are loaded",
+                instanceId, old_save->GetMapId(), mapEntry->id);
+
         return old_save;
+    }
 
     DEBUG_LOG("MapPersistentStateManager::AddPersistentState: mapid = %d, instanceid = %d, reset time = %u, canRset = %u", mapEntry->id, instanceId, resetTime, canReset ? 1 : 0);
 
@@ -567,7 +619,19 @@ MapPersistentState* MapPersistentStateManager::AddPersistentState(MapEntry const
     {
         DungeonPersistentState* dungeonState = new DungeonPersistentState(mapEntry->id, instanceId, resetTime, canReset);
         if (!load)
+        {
+            // initialize reset time
+            // for normal instances if no creatures are killed the instance will reset in two hours
+            if (mapEntry->mapType != MAP_RAID)
+            {
+                if (!resetTime)
+                    resetTime = time(nullptr) + 2 * HOUR;
+                dungeonState->SetResetTime(resetTime);
+                // Schedule a reset for new instances, removed when a player enters in DungeonMap::Add
+                m_Scheduler.ScheduleReset(true, resetTime, DungeonResetEvent(RESET_EVENT_NORMAL_DUNGEON, mapEntry->id, instanceId));
+            }
             dungeonState->SaveToDB();
+        }
         state = dungeonState;
     }
     else if (mapEntry->IsBattleGround())
@@ -579,23 +643,6 @@ MapPersistentState* MapPersistentStateManager::AddPersistentState(MapEntry const
         m_instanceSaveByInstanceId[instanceId] = state;
     else
         m_instanceSaveByMapId[mapEntry->id] = state;
-
-    if (mapEntry->IsDungeon())
-    {
-        if (!resetTime)
-        {
-            // initialize reset time
-            // for normal instances if no creatures are killed the instance will reset in two hours
-            if (mapEntry->mapType == MAP_RAID)
-                resetTime = m_Scheduler.GetResetTimeFor(mapEntry->id);
-            else
-            {
-                resetTime = time(nullptr) + 2 * HOUR;
-                // normally this will be removed soon after in DungeonMap::Add, prevent error
-                m_Scheduler.ScheduleReset(true, resetTime, DungeonResetEvent(RESET_EVENT_NORMAL_DUNGEON, mapEntry->id, instanceId));
-            }
-        }
-    }
 
     if (initPools)
         state->InitPools();
@@ -617,8 +664,11 @@ MapPersistentState *MapPersistentStateManager::GetPersistentState(uint32 mapId, 
     }
 }
 
-void MapPersistentStateManager::DeleteInstanceFromDB(uint32 instanceid)
+void MapPersistentStateManager::DeleteInstanceFromDB(uint32 mapid, uint32 instanceid)
 {
+    // TODO: An efficient query which ensures that we are only deleting instance data
+    // if the mapid is correct (otherwise, we just assume the map is correct - which it _should_ be)
+    // eg. DELETE FROM character_instance WHERE instance = '101' AND EXISTS (SELECT id FROM instance WHERE id = '101' AND map = '429');
     if (instanceid)
     {
         CharacterDatabase.BeginTransaction();
@@ -640,14 +690,7 @@ void MapPersistentStateManager::RemovePersistentState(uint32 mapId, uint32 insta
     {
         PersistentStateMap::iterator itr = m_instanceSaveByInstanceId.find(instanceId);
         if (itr != m_instanceSaveByInstanceId.end())
-        {
-            // state the resettime for normal instances only when they get unloaded
-            if (itr->second->GetMapEntry()->IsDungeon())
-                if (time_t resettime = ((DungeonPersistentState*)itr->second)->GetResetTimeForDB())
-                    CharacterDatabase.PExecute("UPDATE instance SET resettime = '" UI64FMTD "' WHERE id = '%u'", (uint64)resettime, instanceId);
-
             _ResetSave(m_instanceSaveByInstanceId, itr);
-        }
     }
     else
     {
@@ -780,6 +823,13 @@ void MapPersistentStateManager::PackInstances()
     sLog.outString();
 }
 
+void MapPersistentStateManager::ScheduleInstanceResets()
+{
+    // Schedule normal dungeon resets on start up. Must be done after CleanupInstances() 
+    // and PackInstances()
+    m_Scheduler.ScheduleAllDungeonResets();
+}
+
 void MapPersistentStateManager::_ResetSave(PersistentStateMap& holder, PersistentStateMap::iterator &itr)
 {
     // unbind all players bound to the instance
@@ -801,11 +851,18 @@ void MapPersistentStateManager::_ResetInstance(uint32 mapid, uint32 instanceId)
     if (itr != m_instanceSaveByInstanceId.end())
     {
         // delay reset until map unload for loaded map
+        if (mapid != itr->second->GetMapId())
+        {
+            sLog.outError("[CRASH] Instance %u is linked to two different maps, '%u' (scheduler) and '%u' (instance bind)",
+                instanceId, mapid, itr->second->GetMapId());
+            return;
+        }
+
         if (Map * iMap = itr->second->GetMap())
         {
-            if (!iMap->IsDungeon() || iMap->GetId() != mapid)
+            if (!iMap->IsDungeon())
             {
-                sLog.outInfo("[CRASH] Instance %u linked to map %u instead of %u !", instanceId, iMap->GetId(), mapid);
+                sLog.outInfo("[CRASH] Instance %u linked to map %u, which is not a dungeon map!", instanceId, iMap->GetId());
                 return;
             }
 
@@ -816,8 +873,7 @@ void MapPersistentStateManager::_ResetInstance(uint32 mapid, uint32 instanceId)
         _ResetSave(m_instanceSaveByInstanceId, itr);
     }
 
-
-    DeleteInstanceFromDB(instanceId);                       // even if state not loaded
+    DeleteInstanceFromDB(mapid, instanceId);                       // even if state not loaded
 }
 
 struct MapPersistantStateResetWorker
@@ -864,9 +920,16 @@ void MapPersistentStateManager::_ResetOrWarnAll(uint32 mapid, bool warn, uint32 
         }
 
         // remove all binds for online player
-        for (PersistentStateMap::iterator itr = m_instanceSaveByInstanceId.begin(); itr != m_instanceSaveByInstanceId.end(); ++itr)
-            if (itr->second->GetMapId() == mapid)
-                ((DungeonPersistentState*)(itr->second))->UnbindThisState();
+        // If the state is unloaded after players are unbound (no one has entered the map since a restart)
+        // the iterator will be invalidated. Therefore, step before unbinding.
+        for (PersistentStateMap::iterator itr = m_instanceSaveByInstanceId.begin(); itr != m_instanceSaveByInstanceId.end();)
+        {
+            PersistentStateMap::iterator curr = itr;
+            ++itr;
+
+            if (curr->second->GetMapId() == mapid)
+                ((DungeonPersistentState*)(curr->second))->UnbindThisState();
+        }
 
         // reset maps, teleport player automaticaly to their homebinds and unload maps
         MapPersistantStateResetWorker worker;
@@ -976,7 +1039,8 @@ void MapPersistentStateManager::LoadCreatureRespawnTimes()
 
         for (int instance = beginInstance; instance < endInstance; ++instance)
         {
-            MapPersistentState* state = AddPersistentState(mapEntry, instance, resetTime, mapEntry->IsDungeon(), true);
+            MapPersistentState* state = AddPersistentState(mapEntry, instance,
+                resetTime, mapEntry->IsDungeon(), true, false /*= initPools*/);
             if (!state)
                 continue;
 
@@ -1055,7 +1119,8 @@ void MapPersistentStateManager::LoadGameobjectRespawnTimes()
 
         for (int instance = beginInstance; instance < endInstance; ++instance)
         {
-            MapPersistentState* state = AddPersistentState(mapEntry, instance, resetTime, mapEntry->IsDungeon(), true);
+            MapPersistentState* state = AddPersistentState(mapEntry, instance,
+                resetTime, mapEntry->IsDungeon(), true, false /*= initPools*/);
             if (!state)
                 continue;
 

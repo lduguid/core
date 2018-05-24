@@ -1047,6 +1047,7 @@ struct YeggethAI : public ScriptedAI
 
 enum
 {
+    SAY_TUUBID_KILL       =   -1900117,
     SPELL_ATTACK_ORDER    =   25471,
     SPELL_CLEAVE_T        =   26350,
     SPELL_SUNDER_ARMOR    =   24317,
@@ -1089,6 +1090,7 @@ struct TuubidAI : public ScriptedAI
                 {
                     DoCastSpellIfCan(pMark, SPELL_ATTACK_ORDER);
                     m_uiMarkedGUID = pMark->GetGUID();
+                    DoScriptText(SAY_TUUBID_KILL, m_creature, pMark);
                 }
                 else
                 {
@@ -1423,12 +1425,12 @@ void AddSC_ruins_of_ahnqiraj()
     newscript->Name = "mob_anubisath_guardian";
     newscript->GetAI = &GetAI_mob_anubisath_guardian;
     newscript->RegisterSelf();
-
+    /*
     newscript = new Script;
     newscript->Name = "mob_anti_intrusion";
     newscript->GetAI = &GetAI_AntiIntrusion;
     newscript->RegisterSelf();
-
+    */
     newscript = new Script;
     newscript->Name = "mob_qiraji_swarmguard";
     newscript->GetAI = &GetAI_QirajiSwarmguard;
@@ -1498,12 +1500,12 @@ void AddSC_ruins_of_ahnqiraj()
     newscript->Name = "boss_tuubid";
     newscript->GetAI = &GetAI_Tuubid;
     newscript->RegisterSelf();
-
+    /*
     newscript = new Script;
     newscript->Name = "boss_yeggeth";
     newscript->GetAI = &GetAI_Yeggeth;
     newscript->RegisterSelf();
-
+    */
     newscript = new Script;
     newscript->Name = "boss_zerran";
     newscript->GetAI = &GetAI_Zerran;

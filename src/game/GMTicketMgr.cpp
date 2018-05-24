@@ -122,7 +122,7 @@ void GmTicket::WritePacket(WorldPacket& data) const
     if (IsCompleted())
     {
         displayedMessage << "\n\n-----------------------------------------------------------------------\n";
-        displayedMessage << "Nostalrius customer ticket #" << GetId() << " completed.\n";
+        displayedMessage << "Elysium customer ticket #" << GetId() << " completed.\n";
         if (!_response.empty())
         {
             displayedMessage << "\n    GM answer:\n";
@@ -196,6 +196,35 @@ std::string GmTicket::FormatMessageString(ChatHandler& handler, const char* szCl
     if (szCompletedName)
         ss << handler.PGetParseString(LANG_COMMAND_TICKETCOMPLETED, szCompletedName);
     return ss.str();
+}
+
+const char* GmTicket::GetTicketCategoryName(TicketType category) const
+{
+    switch (category)
+    {
+        case GMTICKET_STUCK:
+            return "Stuck";
+        case GMTICKET_BEHAVIOR_HARASSMENT:
+            return "Behavior";
+        case GMTICKET_GUILD:
+            return "Guild";
+        case GMTICKET_ITEM:
+            return "Item";
+        case GMTICKET_ENVIRONMENTAL:
+            return "Environment";
+        case GMTICKET_NONQUEST_CREEP:
+            return "Creature";
+        case GMTICKET_QUEST_QUESTNPC:
+            return "Quest";
+        case GMTICKET_TECHNICAL:
+            return "Technical";
+        case GMTICKET_ACCOUNT_BILLING:
+            return "Billing";
+        case GMTICKET_CHARACTER:
+            return "Character";
+    }
+
+    return "Unknown";
 }
 
 void GmTicket::SetUnassigned()
@@ -370,12 +399,12 @@ void TicketMgr::RemoveTicket(uint32 ticketId)
     }
 }
 
-void TicketMgr::ShowList(ChatHandler& handler, bool onlineOnly) const
+void TicketMgr::ShowList(ChatHandler& handler, bool onlineOnly, uint8 category) const
 {
     handler.SendSysMessage(onlineOnly ? LANG_COMMAND_TICKETSHOWONLINELIST : LANG_COMMAND_TICKETSHOWLIST);
     for (GmTicketList::const_iterator itr = _ticketList.begin(); itr != _ticketList.end(); ++itr)
         if (!itr->second->IsClosed() && !itr->second->IsCompleted())
-            if (!onlineOnly || itr->second->GetPlayer())
+            if ((!onlineOnly || itr->second->GetPlayer()) && (!category || (itr->second->GetTicketType() == TicketType(category))))
                 handler.SendSysMessage(itr->second->FormatMessageString(handler).c_str());
 }
 

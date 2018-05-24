@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -79,21 +81,15 @@ Corpse* ObjectAccessor::GetCorpseInMap(ObjectGuid guid, uint32 mapid)
 Player* ObjectAccessor::FindPlayerNotInWorld(ObjectGuid guid)
 {
     if (!guid)
-        return NULL;
-
-    Player * plr = HashMapHolder<Player>::Find(guid);;
-    if (!plr || !plr->IsInWorld())
-        return NULL;
-
-    return plr;
+        return nullptr;
+    return HashMapHolder<Player>::Find(guid);
 }
 
-Player*
-ObjectAccessor::FindPlayer(ObjectGuid guid)
+Player* ObjectAccessor::FindPlayer(ObjectGuid guid)
 {
-    Player * plr = FindPlayerNotInWorld(guid);;
+    Player * plr = FindPlayerNotInWorld(guid);
     if (!plr || !plr->IsInWorld())
-        return NULL;
+        return nullptr;
 
     return plr;
 }

@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -66,6 +68,7 @@ GameObject::GameObject() : WorldObject(),
     m_model = NULL;
     m_rotation = 0;
     m_playerGroupId = 0;
+    m_summonTarget = ObjectGuid();
 }
 
 GameObject::~GameObject()
@@ -323,9 +326,19 @@ void GameObject::Update(uint32 update_diff, uint32 /*p_time*/)
                                 return;
                             }
 
-                            // respawn timer
-                            GetMap()->Add(this);
-                            break;
+                            const LockEntry *lock = sLockStore.LookupEntry(GetGOInfo()->GetLockId());
+                            //workarounds for PvP banners
+                            if (lock && lock->Index[1] == LOCKTYPE_SLOW_OPEN)
+                            {
+                                m_respawnDelayTime = -1; //spawn animation
+                                GetMap()->Add(this);
+                                m_respawnDelayTime = 0;
+                                WorldPacket data(SMSG_GAMEOBJECT_RESET_STATE, 8);
+                                data << GetObjectGuid();
+                                SendObjectMessageToSet(&data,true);
+                            }
+                            else
+                                GetMap()->Add(this);
                     }
                 }
             }
@@ -487,6 +500,7 @@ void GameObject::Update(uint32 update_diff, uint32 /*p_time*/)
 
                 if (spellId)
                 {
+                    // TODO find out why this is here, because m_UniqueUsers is empty for GAMEOBJECT_TYPE_GOOBER
                     for (GuidsSet::const_iterator itr = m_UniqueUsers.begin(); itr != m_UniqueUsers.end(); ++itr)
                     {
                         if (Player* owner = GetMap()->GetPlayer(*itr))
@@ -577,7 +591,7 @@ void GameObject::JustDespawnedWaitingRespawn()
             sLog.outInfo("[Pool #%u] %s is not deleted but should be", poolid, GetGuidStr().c_str());
             AddObjectToRemoveList();
         }
-        sPoolMgr.UpdatePool<GameObject>(state, poolid, 0);
+        sPoolMgr.UpdatePool<GameObject>(state, poolid, GetGUIDLow());
         return;
     }
 }
@@ -594,27 +608,125 @@ void GameObject::Refresh()
 
 void GameObject::AddUniqueUse(Player* player)
 {
+    std::unique_lock<std::mutex> guard(m_UniqueUsers_lock);
+
     AddUse();
+
+    if (m_UniqueUsers.find(player->GetObjectGuid()) != m_UniqueUsers.end())
+        return;
 
     if (!m_firstUser)
         m_firstUser = player->GetObjectGuid();
 
     m_UniqueUsers.insert(player->GetObjectGuid());
 
+    guard.unlock();
+
+    if (GameObjectInfo const* info = GetGOInfo())
+        if (info->type == GAMEOBJECT_TYPE_SUMMONING_RITUAL &&
+            info->summoningRitual.animSpell &&
+            GetOwnerGuid() != player->GetObjectGuid())
+        {
+            SpellEntry const *spellInfo = sSpellMgr.GetSpellEntry(info->summoningRitual.animSpell);
+            if (!spellInfo)
+            {
+                sLog.outError("WORLD: unknown spell id %u at play anim for gameobject (Entry: %u GoType: %u )", info->summoningRitual.animSpell, GetEntry(), GetGoType());
+                return;
+            }
+            Spell* spell = new Spell(player, spellInfo, true, GetObjectGuid());
+            spell->SetChannelingVisual(true);
+            SpellCastTargets targets;
+            targets.setGOTarget(this);
+            spell->prepare(std::move(targets));
+        }
+}
+
+void GameObject::RemoveUniqueUse(Player* player)
+{
+    std::lock_guard<std::mutex> guard(m_UniqueUsers_lock);
+
+    auto itr = m_UniqueUsers.find(player->GetObjectGuid());
+    if (itr == m_UniqueUsers.end())
+        return;
+    m_UniqueUsers.erase(itr);
+
+    if (GameObjectInfo const* info = GetGOInfo())
+        // owner cancelled
+        if (player->GetObjectGuid() == GetOwnerGuid() ||
+            // too many helpers cancelled while it's activated
+            (GetGoState() == GO_STATE_ACTIVE &&
+            m_UniqueUsers.size() < info->summoningRitual.reqParticipants))
+        {
+            if (!info->summoningRitual.ritualPersistent)
+            {
+                if (GetGoState() != GO_STATE_ACTIVE)
+                    SetLootState(GO_JUST_DEACTIVATED);
+                else if (GetOwner())
+                    // if active it'll be destroyed in Spell::update
+                    // remove it from owner's list to keep it running
+                    GetOwner()->RemoveGameObject(this, false);
+            }
+            SetGoState(GO_STATE_READY);
+        }
+}
+
+void GameObject::FinishRitual()
+{
+    std::unique_lock<std::mutex> guard(m_UniqueUsers_lock);
+
+    if (GameObjectInfo const* info = GetGOInfo())
+    {
+        // take spell cooldown
+        if (GetOwner() && GetOwner()->IsPlayer())
+            if (SpellEntry const* createBySpell = sSpellMgr.GetSpellEntry(GetSpellId()))
+                GetOwner()->CooldownEvent(createBySpell);
+        if (!info->summoningRitual.ritualPersistent)
+            SetLootState(GO_JUST_DEACTIVATED);
+        // Only ritual of doom deals a second spell
+        if (uint32 spellid = info->summoningRitual.casterTargetSpell)
+        {
+            // On a random user
+            auto it = m_UniqueUsers.begin();
+            if (it != m_UniqueUsers.end())
+            {
+                std::advance(it, urand(0, m_UniqueUsers.size() - 1));
+
+                guard.unlock();
+
+                if (Player* target = GetMap()->GetPlayer(*it))
+                    target->CastSpell(target, spellid, true);
+            }
+        }
+    }
+}
+
+bool GameObject::HasUniqueUser(Player* player)
+{
+    std::lock_guard<std::mutex> guard(m_UniqueUsers_lock);
+    return m_UniqueUsers.find(player->GetObjectGuid()) != m_UniqueUsers.end();
+}
+
+uint32 GameObject::GetUniqueUseCount()
+{
+    std::lock_guard<std::mutex> guard(m_UniqueUsers_lock);
+    return m_UniqueUsers.size();
 }
 
 void GameObject::Delete()
 {
-    SendObjectDeSpawnAnim(GetObjectGuid());
+    if (!IsDeleted())
+        AddObjectToRemoveList();
+
+    // no despawn animation for not activated rituals
+    if (GetGoType() != GAMEOBJECT_TYPE_SUMMONING_RITUAL ||
+        GetGoState() == GO_STATE_ACTIVE)
+        SendObjectDeSpawnAnim(GetObjectGuid());
 
     SetGoState(GO_STATE_READY);
     SetUInt32Value(GAMEOBJECT_FLAGS, GetGOInfo()->flags);
 
     if (uint16 poolid = sPoolMgr.IsPartOfAPool<GameObject>(GetGUIDLow()))
         sPoolMgr.GetPoolGameObjects(poolid).DespawnObject(*GetMap()->GetPersistentState(), GetGUIDLow());
-
-    if (!IsDeleted())
-        AddObjectToRemoveList();
 }
 
 void GameObject::getFishLoot(Loot *fishloot, Player* loot_owner)
@@ -623,6 +735,10 @@ void GameObject::getFishLoot(Loot *fishloot, Player* loot_owner)
 
     uint32 zone, subzone;
     GetZoneAndAreaId(zone, subzone);
+
+    // Don't allow fishing in hidden wetlands lake
+    if (subzone == 11 && loot_owner->IsWithinDist2d(-4074.74f, -1315.79f, 100.0f))
+        return;
 
     // if subzone loot exist use it
     if (!fishloot->FillLoot(subzone, LootTemplates_Fishing, loot_owner, true, (subzone != zone)) && subzone != zone)
@@ -1161,15 +1277,6 @@ void GameObject::Use(Unit* user)
             if (user->GetTypeId() != TYPEID_PLAYER)
                 return;
 
-            // TODO: possible must be moved to loot release (in different from linked triggering)
-            if (GetGOInfo()->chest.eventId)
-            {
-                DEBUG_LOG("Chest ScriptStart id %u for GO %u", GetGOInfo()->chest.eventId, GetGUIDLow());
-
-                if (!sScriptMgr.OnProcessEvent(GetGOInfo()->chest.eventId, user, this, true))
-                    GetMap()->ScriptsStart(sEventScripts, GetGOInfo()->chest.eventId, user, this);
-            }
-
             TriggerLinkedGameObject(user);
             return;
         }
@@ -1495,16 +1602,10 @@ void GameObject::Use(Unit* user)
 
             AddUniqueUse(player);
 
-            if (info->summoningRitual.animSpell)
-            {
-                player->CastSpell(player, info->summoningRitual.animSpell, true);
-
-                // for this case, summoningRitual.spellId is always triggered
-                triggered = true;
-            }
-
             // full amount unique participants including original summoner, need more
-            if (GetUniqueUseCount() < info->summoningRitual.reqParticipants)
+            if (GetUniqueUseCount() < info->summoningRitual.reqParticipants ||
+                !info->summoningRitual.spellId ||
+                GetGoState() == GO_STATE_ACTIVE) // spell already sent
                 return;
 
             // owner is first user for non-wild GO objects, if it offline value already set to current user
@@ -1512,22 +1613,14 @@ void GameObject::Use(Unit* user)
                 if (Player* firstUser = GetMap()->GetPlayer(m_firstUser))
                     spellCaster = firstUser;
 
+            // Some have a visual effect
+            SetGoState(GO_STATE_ACTIVE);
+
             spellId = info->summoningRitual.spellId;
 
             // spell have reagent and mana cost but it not expected use its
             // it triggered spell in fact casted at currently channeled GO
             triggered = true;
-
-            // finish owners spell
-            if (owner)
-                owner->FinishSpell(CURRENT_CHANNELED_SPELL);
-
-            // can be deleted now, if
-            if (!info->summoningRitual.ritualPersistent)
-                SetLootState(GO_JUST_DEACTIVATED);
-            // reset ritual for this GO
-            else
-                ClearAllUsesData();
 
             // go to end function to spell casting
             break;
@@ -1619,6 +1712,7 @@ void GameObject::Use(Unit* user)
                 // 15004
                 // 15005
                 player->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
+                player->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
                 bg->EventPlayerClickedOnFlag(player, this);
                 return;                                     //we don't need to delete flag ... it is despawned!
             }
@@ -1668,6 +1762,7 @@ void GameObject::Use(Unit* user)
                     }
                 }
                 player->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
+                player->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
                 //this cause to call return, all flags must be deleted here!!
                 spellId = 0;
                 Delete();
@@ -1764,11 +1859,25 @@ void GameObject::Use(Unit* user)
 
     Spell *spell = new Spell(spellCaster, spellInfo, triggered, GetObjectGuid());
 
-    // spell target is user of GO
     SpellCastTargets targets;
-    targets.setUnitTarget(user);
 
-    spell->prepare(&targets);
+    // If summoning ritual GO use the summon target instead
+    if (GetGoType() == GAMEOBJECT_TYPE_SUMMONING_RITUAL)
+    {
+        Player* summonTarget = nullptr;
+        // Only player summoning requires a target
+        if (GetEntry() == 36727 && getSummonTarget())
+        {
+            summonTarget = sObjectMgr.GetPlayer(getSummonTarget());
+            targets.setUnitTarget(summonTarget);
+        }
+        // Object coordinates are needed later
+        targets.setGOTarget(this);
+    }
+    else
+        targets.setUnitTarget(user);
+
+    spell->prepare(std::move(targets));
 }
 
 // overwrite WorldObject function for proper name localization

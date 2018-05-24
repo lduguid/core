@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -621,6 +623,7 @@ void AuctionHouseObject::Update()
                 data.parts[0].itemsEntries[0] = itr->second->itemTemplate;
                 Item* item = sAuctionMgr.GetAItem(itr->second->itemGuidLow);
                 data.parts[0].itemsCount[0] = item ? item->GetCount() : 0;
+                data.parts[0].itemsGuid[0] = itr->second->itemGuidLow;
                 data.parts[1].lowGuid = itr->second->bidder;
                 data.parts[1].money = itr->second->bid;
                 sWorld.LogTransaction(data);
@@ -715,7 +718,8 @@ void AuctionHouseObject::BuildListAuctionItems(WorldPacket& data, Player* player
             if (query.auctionSubCategory != 0xffffffff && proto->SubClass != query.auctionSubCategory)
                 continue;
 
-            if (query.auctionSlotID != 0xffffffff && proto->InventoryType != query.auctionSlotID)
+            if (query.auctionSlotID != 0xffffffff && proto->InventoryType != query.auctionSlotID &&
+                    (query.auctionSlotID != INVTYPE_CHEST ||  query.auctionSlotID == INVTYPE_CHEST && proto->InventoryType != INVTYPE_ROBE))
                 continue;
 
             if (query.quality != 0xffffffff && proto->Quality < query.quality)

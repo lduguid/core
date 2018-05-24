@@ -548,7 +548,8 @@ struct npc_witch_doctor_unbagwaAI : ScriptedAI
         if (!m_bStartEvent)
             return;
 
-        --m_uiAttackersCount;
+        if (m_uiAttackersCount > 0)
+            --m_uiAttackersCount;
 
         if (!m_uiAttackersCount && m_uiWaveCount > MAX_WAVE_COUNT)          
             ResetCreature();
@@ -648,12 +649,12 @@ void AddSC_stranglethorn_vale()
     newscript->Name = "mob_yenniku";
     newscript->GetAI = &GetAI_mob_yenniku;
     newscript->RegisterSelf();
-
+    /*
     newscript = new Script;
     newscript->Name = "mob_assistant_kryll";
     newscript->GetAI = &GetAI_mob_assistant_kryll;
     newscript->RegisterSelf();
-
+    */
     newscript = new Script;
     newscript->Name = "go_transpolyporter";
     newscript->GOGetAI = &GetAIgo_transpolyporter;

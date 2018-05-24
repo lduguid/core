@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +31,7 @@ GossipMenu::GossipMenu(WorldSession* session) : m_session(session)
 {
     m_gItems.reserve(16);                                   // can be set for max from most often sizes to speedup push_back and less memory use
     m_gMenuId = 0;
+    m_discoveredNode = false;
 }
 
 GossipMenu::~GossipMenu()
@@ -117,6 +120,7 @@ void GossipMenu::ClearMenu()
     m_gItems.clear();
     m_gItemsData.clear();
     m_gMenuId = 0;
+    m_discoveredNode = false;
 }
 
 PlayerMenu::PlayerMenu(WorldSession *session) : mGossipMenu(session)
@@ -381,13 +385,29 @@ void QuestMenu::ClearMenu()
     m_qItems.clear();
 }
 
-void PlayerMenu::SendQuestGiverQuestList(QEmote eEmote, const std::string& Title, ObjectGuid npcGUID)
+void PlayerMenu::SendQuestGiverQuestList(QEmote eEmote, const std::string& Title, ObjectGuid guid)
 {
     WorldPacket data(SMSG_QUESTGIVER_QUEST_LIST, 100);      // guess size
-    data << ObjectGuid(npcGUID);
-    data << Title;
-    data << uint32(eEmote._Delay);                          // player emote
-    data << uint32(eEmote._Emote);                          // NPC emote
+    data << ObjectGuid(guid);
+
+    if (QuestGreetingLocale const *questGreeting = sObjectMgr.GetQuestGreetingLocale(guid.GetEntry(), (guid.IsAnyTypeCreature() ? 0 : 1)))
+    {
+        int locale_idx = GetMenuSession()->GetSessionDbLocaleIndex();
+
+        if ((int32)questGreeting->Content.size() > locale_idx + 1 && !questGreeting->Content[locale_idx + 1].empty())
+            data << questGreeting->Content[locale_idx + 1];
+        else
+            data << questGreeting->Content[0];
+
+        data << uint32(questGreeting->EmoteDelay);
+        data << uint32(questGreeting->Emote);
+    }
+    else
+    {
+        data << Title;
+        data << uint32(eEmote._Delay);                          // player emote
+        data << uint32(eEmote._Emote);                          // NPC emote
+    }
 
     size_t count_pos = data.wpos();
     data << uint8(mQuestMenu.MenuItemCount());
@@ -420,7 +440,7 @@ void PlayerMenu::SendQuestGiverQuestList(QEmote eEmote, const std::string& Title
     }
     data.put<uint8>(count_pos, count);
     GetMenuSession()->SendPacket(&data);
-    //DEBUG_LOG("WORLD: Sent SMSG_QUESTGIVER_QUEST_LIST NPC Guid = %s", npcGUID.GetString().c_str());
+    //DEBUG_LOG("WORLD: Sent SMSG_QUESTGIVER_QUEST_LIST NPC Guid = %s", guid.GetString().c_str());
 }
 
 void PlayerMenu::SendQuestGiverStatus(uint8 questStatus, ObjectGuid npcGUID)
@@ -471,9 +491,10 @@ void PlayerMenu::SendQuestGiverQuestDetails(Quest const *pQuest, ObjectGuid npcG
     {
         ItemPrototype const* IProto;
 
-        data << uint32(pQuest->GetRewChoiceItemsCount());
+        auto count = pQuest->GetRewChoiceItemsCount(); // // QUEST_REWARD_CHOICES_COUNT
+        data << uint32(count); 
 
-        for (uint32 i = 0; i < QUEST_REWARD_CHOICES_COUNT; ++i)
+        for (uint32 i = 0; i < count; ++i)
         {
             data << uint32(pQuest->RewChoiceItemId[i]);
             data << uint32(pQuest->RewChoiceItemCount[i]);
@@ -486,9 +507,10 @@ void PlayerMenu::SendQuestGiverQuestDetails(Quest const *pQuest, ObjectGuid npcG
                 data << uint32(0x00);
         }
 
-        data << uint32(pQuest->GetRewItemsCount());
-
-        for (uint32 i = 0; i < QUEST_REWARDS_COUNT; ++i)
+        count = pQuest->GetRewItemsCount(); // QUEST_REWARDS_COUNT
+        data << uint32(count);
+        
+        for (uint32 i = 0; i < count; ++i)
         {
             data << uint32(pQuest->RewItemId[i]);
             data << uint32(pQuest->RewItemCount[i]);
@@ -504,34 +526,15 @@ void PlayerMenu::SendQuestGiverQuestDetails(Quest const *pQuest, ObjectGuid npcG
         data << uint32(pQuest->GetRewOrReqMoney());
     }
 
-    data << pQuest->GetReqItemsCount();
-    for (uint32 i = 0; i <  QUEST_OBJECTIVES_COUNT; i++)
-    {
-        data << pQuest->ReqItemId[i];
-        data << pQuest->ReqItemCount[i];
-    }
-
-
-    data << pQuest->GetReqCreatureOrGOcount();
-    for (uint32 i = 0; i < QUEST_OBJECTIVES_COUNT; i++)
-    {
-        data << uint32(pQuest->ReqCreatureOrGOId[i]);
-        data << pQuest->ReqCreatureOrGOCount[i];
-    }
-
-    /*[-ZERO]
-    // rewarded honor points. Multiply with 10 to satisfy client
     data << uint32(pQuest->GetRewSpell());                  // reward spell, this spell will display (icon) (casted if RewSpellCast==0)
-    data << uint32(pQuest->GetRewSpellCast());              // casted spell
-
     data << uint32(QUEST_EMOTE_COUNT);
 
     for (uint32 i = 0; i < QUEST_EMOTE_COUNT; ++i)
     {
         data << uint32(pQuest->DetailsEmote[i]);
-        data << uint32(pQuest->DetailsEmoteDelay[i]);       // DetailsEmoteDelay (in ms)
+        data << uint32(pQuest->DetailsEmoteDelay[i]); // delay between emotes in ms
     }
-    */
+
     GetMenuSession()->SendPacket(&data);
 
     DEBUG_LOG("WORLD: Sent SMSG_QUESTGIVER_QUEST_DETAILS NPCGuid = %s, questid = %u", npcGUID.GetString().c_str(), pQuest->GetQuestId());
@@ -751,8 +754,11 @@ void PlayerMenu::SendQuestGiverRequestItems(Quest const *pQuest, ObjectGuid npcG
         }
     }
 
-    // We may wish a better check, perhaps checking the real quest requirements
-    if (RequestItemsText.empty())
+    // Quests that don't require items use the RequestItemsText field to store the text
+    // that is shown when you talk to the quest giver while the quest is incomplete.
+    // Therefore the text should not be shown for them when the quest is complete.
+    // For quests that do require items, it is self explanatory.
+    if (RequestItemsText.empty() || ((pQuest->GetReqItemsCount() == 0) && Completable))
     {
         SendQuestGiverOfferReward(pQuest, npcGUID, true);
         return;

@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -82,6 +84,15 @@ enum Typecommand
     // [-ZERO] tbc enumerations [?]
     GUILD_UNK1      = 0x10,
     GUILD_UNK3      = 0x16
+};
+
+enum class GuildAddStatus
+{
+    OK,
+    GUILD_FULL,
+    ALREADY_IN_GUILD,
+    UNKNOWN_PLAYER,
+    PLAYER_DATA_ERROR
 };
 
 enum CommandErrors
@@ -231,7 +242,7 @@ class Guild
         uint32 GetBackgroundColor() const { return m_BackgroundColor; }
 
         void SetLeader(ObjectGuid guid);
-        bool AddMember(ObjectGuid plGuid, uint32 plRank);
+        GuildAddStatus AddMember(ObjectGuid plGuid, uint32 plRank);
         bool DelMember(ObjectGuid guid, bool isDisbanding = false);
         //lowest rank is the count of ranks - 1 (the highest rank_id in table)
         uint32 GetLowestRank() const { return m_Ranks.size() - 1; }

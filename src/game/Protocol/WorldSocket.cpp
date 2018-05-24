@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,7 +56,9 @@ int WorldSocket::ProcessIncoming(WorldPacket* new_pct)
     new_pct->FillPacketTime(WorldTimer::getMSTime());
 
     // Dump received packet.
-    sLog.outWorldPacketDump(reinterpret_cast <uint64> (get_handle()), new_pct->GetOpcode(), LookupOpcodeName(new_pct->GetOpcode()), new_pct, true);
+    sLog.outWorldPacketDump(get_handle(), new_pct->GetOpcode(),
+                            LookupOpcodeName(new_pct->GetOpcode()), new_pct,
+                            true);
 
     try
     {
@@ -158,7 +162,7 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
     std::string safe_account = account; // Duplicate, else will screw the SHA hash verification below
     LoginDatabase.escape_string(safe_account);
     // No SQL injection, username escaped.
-                             
+
     QueryResult *result = LoginDatabase.PQuery("SELECT a.id, aa.gmLevel, a.sessionkey, a.last_ip, a.locked, a.v, a.s, a.mutetime, a.locale, a.os, a.flags, "
         "ab.unbandate > UNIX_TIMESTAMP() OR ab.unbandate = ab.bandate FROM account a LEFT JOIN account_access aa ON a.id = aa.id AND aa.RealmID IN (-1, %u) "
         "LEFT JOIN account_banned ab ON a.id = ab.id AND ab.active = 1 WHERE a.username = '%s' ORDER BY aa.RealmID DESC LIMIT 1", realmID, safe_account.c_str());
@@ -215,6 +219,12 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
 
     K.SetHexStr(fields[2].GetString());
 
+    if (K.AsByteArray().empty())
+    {
+        delete result;
+        return -1;
+    }
+
     time_t mutetime = time_t (fields[7].GetUInt64());
 
     locale = LocaleConstant(fields[8].GetUInt8());
@@ -222,10 +232,10 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
         locale = LOCALE_enUS;
     os = fields[9].GetString();
     uint32 accFlags = fields[10].GetUInt32();
-
+    bool isBanned = fields[11].GetBool();
     delete result;
 
-    bool isBanned = fields[11].GetBool();
+    
     if (isBanned || sAccountMgr.IsIPBanned(GetRemoteAddress()))
     {
         packet.Initialize(SMSG_AUTH_RESPONSE, 1);
@@ -287,16 +297,6 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
     SqlStatement stmt = LoginDatabase.CreateStatement(updAccount, "UPDATE account SET last_ip = ? WHERE username = ?");
     stmt.PExecute(address.c_str(), account.c_str());
 
-    // NOTE ATM the socket is single-threaded, have this in mind ...
-    ACE_NEW_RETURN(m_Session, WorldSession(id, this, AccountTypes(security), mutetime, locale), -1);
-
-    m_Crypt.SetKey(K.AsByteArray());
-    m_Crypt.Init();
-
-    m_Session->SetUsername(account);
-    m_Session->SetGameBuild(BuiltNumberClient);
-    m_Session->SetAccountFlags(accFlags);
-
     ClientOSType clientOs;
     if (os == "niW")
         clientOs = CLIENT_OS_WIN;
@@ -308,6 +308,15 @@ int WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
         return -1;
     }
 
+    // NOTE ATM the socket is single-threaded, have this in mind ...
+    ACE_NEW_RETURN(m_Session, WorldSession(id, this, AccountTypes(security), mutetime, locale), -1);
+
+    m_Crypt.SetKey(K.AsByteArray());
+    m_Crypt.Init();
+
+    m_Session->SetUsername(account);
+    m_Session->SetGameBuild(BuiltNumberClient);
+    m_Session->SetAccountFlags(accFlags);
     m_Session->SetOS(clientOs);
     m_Session->LoadTutorialsData();
     m_Session->InitWarden(&K);

@@ -2831,17 +2831,31 @@ bool ChatHandler::HandlePetRenameCommand(char* args)
         SetSentErrorMessage(true);
         return false;
     }
-    CharacterPetCache* petData = sCharacterDatabaseCache.GetCharacterPetById(petId);
-    if (!petData)
+
+    std::unique_ptr<QueryResult> result(CharacterDatabase.PQuery("SELECT owner, name FROM character_pet WHERE id = %u", petId));
+
+    if (!result)
     {
         PSendSysMessage("Pet #%u not found", petId);
         SetSentErrorMessage(true);
         return false;
     }
-    PSendSysMessage("Pet #%u (\"%s\", owner #%u) renamed to \"%s\"", petData->id, petData->name.c_str(), petData->owner, newName.c_str());
-    petData->name = newName;
+
+    auto fields = result->Fetch();
+    auto owner_guid = fields[0].GetUInt32();
+    auto pet_name = fields[1].GetString();
+
+    PSendSysMessage("Pet #%u (\"%s\", owner #%u) renamed to \"%s\"", petId, pet_name, owner_guid, newName.c_str());
     CharacterDatabase.escape_string(newName);
     CharacterDatabase.PExecute("UPDATE character_pet SET name = \"%s\" WHERE id = %u", newName.c_str(), petId);
+
+    CharacterPetCache* petData = sCharacterDatabaseCache.GetCharacterPetById(petId);
+
+    if (petData)
+    {
+        petData->name = newName;
+    }
+
     return true;
 }
 
@@ -2979,9 +2993,10 @@ bool ChatHandler::HandleDebugLootTableCommand(char* args)
     std::string tableName;
     int lootid = 0;
     int checkItem = 0;
-    in >> tableName >> lootid >> checkItem;
+    unsigned int simCount = 0;
+    in >> tableName >> lootid >> simCount >> checkItem;
+    simCount = simCount? simCount : 10000;
     SetSentErrorMessage(true);
-
 
     LootStore const* store = NULL;
     if (tableName == "creature")
@@ -3017,11 +3032,14 @@ bool ChatHandler::HandleDebugLootTableCommand(char* args)
 
     Player* lootOwner = getSelectedPlayer();
 
-    const static int TESTS_COUNT = 10000;
     std::map<uint32, uint32> lootChances;
     if (checkItem)
         lootChances[checkItem] = 0;
-    for (int i = 0; i < TESTS_COUNT; ++i)
+
+    const unsigned int MAX_TIME = 30;
+    auto startTime = time(nullptr);
+
+    for (unsigned int i = 0; i < simCount; ++i)
     {
         Loot l(NULL);
         if (lootOwner)
@@ -3048,8 +3066,18 @@ bool ChatHandler::HandleDebugLootTableCommand(char* args)
                 for (QuestItemList::const_iterator it = itemsList->second->begin(); it != itemsList->second->end(); ++it)
                     lootChances[l.items[it->index].itemid]++;
         }
+
+        if (i % 1000000 == 0) // check the time every million iterations
+        {
+            if (time(nullptr) - startTime > MAX_TIME)
+            {
+                PSendSysMessage("Error: Aborted loot simulation after %u runs for exceeding max allowed time of %us", i, MAX_TIME);
+                simCount = i;
+                break;
+            }
+        }
     }
-    PSendSysMessage("%u items got after %u attempts for loot %s.%u", lootChances.size(), TESTS_COUNT, tableName.c_str(), lootid);
+    PSendSysMessage("%u items dropped after %u attempts for loot %s.%u", lootChances.size(), simCount, tableName.c_str(), lootid);
     for (std::map<uint32, uint32>::const_iterator it = lootChances.begin(); it != lootChances.end(); ++it)
         if (it->first == checkItem || !checkItem)
         {
@@ -3058,7 +3086,7 @@ bool ChatHandler::HandleDebugLootTableCommand(char* args)
                 continue;
 
             std::stringstream chance;
-            chance << 100 * it->second / float(TESTS_COUNT);
+            chance << 100 * it->second / float(simCount);
             chance << "%";
             if (m_session)
                 PSendSysMessage(LANG_ITEM_LIST_CHAT, it->first, it->first, proto->Name1, chance.str().c_str());

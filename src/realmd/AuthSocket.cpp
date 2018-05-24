@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -400,7 +402,7 @@ bool AuthSocket::_HandleLogonChallenge()
         "(unbandate = bandate OR unbandate > UNIX_TIMESTAMP()) AND ip = '%s'", address.c_str());
     if (result)
     {
-        pkt << (uint8)WOW_FAIL_BANNED;
+        pkt << (uint8)WOW_FAIL_DB_BUSY;
         BASIC_LOG("[AuthChallenge] Banned ip %s tries to login!", get_remote_address().c_str());
         delete result;
     }
@@ -409,10 +411,23 @@ bool AuthSocket::_HandleLogonChallenge()
         ///- Get the account details from the account table
         // No SQL injection (escaped user name)
 
-        result = LoginDatabase.PQuery("SELECT sha_pass_hash,id,locked,last_ip,v,s,security FROM account WHERE username = '%s'",_safelogin.c_str ());
+        result = LoginDatabase.PQuery("SELECT sha_pass_hash,id,locked,last_ip,v,s,security,email_verif FROM account WHERE username = '%s'",_safelogin.c_str ());
         if (result)
         {
             Field* fields = result->Fetch();
+
+			// Prevent login if the user's email address has not been verified
+			bool requireVerification = sConfig.GetBoolDefault("ReqEmailVerification", false);
+			bool verified = (*result)[7].GetBool();
+
+			if (requireVerification && !verified)
+			{
+				BASIC_LOG("[AuthChallenge] Account's email address requires email verification - rejecting login");
+				pkt << (uint8)WOW_FAIL_UNKNOWN_ACCOUNT;
+				send((char const*)pkt.contents(), pkt.size());
+				return true;
+			}
+
             ///- If the IP is 'locked', check that the player comes indeed from the correct IP address
             bool locked = false;
             lockFlags = (LockFlag)(*result)[2].GetUInt32();
@@ -749,7 +764,7 @@ bool AuthSocket::_HandleLogonProof()
     }
 
     // reject credentials on unexpected build to confuse custom client authors
-    auto const approvedBuild = _platform == X86 && (_os == Win || _os == OSX);
+    auto const approvedBuild = (_platform == X86 || _platform == PPC) && (_os == Win || _os == OSX);
 
     ///- Check if SRP6 results match (password is correct), else send an error
     if (!memcmp(M.AsByteArray().data(), lp.M1, 20) && pinResult && approvedBuild)
@@ -809,7 +824,7 @@ bool AuthSocket::_HandleLogonProof()
                     if(WrongPassBanType)
                     {
                         uint32 acc_id = fields[0].GetUInt32();
-                        LoginDatabase.PExecute("INSERT INTO account_banned VALUES ('%u',UNIX_TIMESTAMP(),UNIX_TIMESTAMP()+'%u','MaNGOS realmd','Failed login autoban',1)",
+                        LoginDatabase.PExecute("INSERT INTO account_banned VALUES ('%u',UNIX_TIMESTAMP(),UNIX_TIMESTAMP()+'%u','MaNGOS realmd','Failed login autoban',1,1,0)",
                             acc_id, WrongPassBanTime);
                         BASIC_LOG("[AuthChallenge] account %s got banned for '%u' seconds because it failed to authenticate '%u' times",
                             _login.c_str(), WrongPassBanTime, failed_logins);

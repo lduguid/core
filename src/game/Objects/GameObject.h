@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +27,7 @@
 #include "Object.h"
 #include "LootMgr.h"
 #include "Database/DatabaseEnv.h"
+#include <mutex>
 
 // GCC have alternative #pragma pack(N) syntax and old gcc version not support pack(push,N), also any gcc version not support it at some platform
 #if defined( __GNUC__ )
@@ -652,11 +655,17 @@ class MANGOS_DLL_SPEC GameObject : public WorldObject
             m_UniqueUsers.clear();
         }
 
+        // Used for GAMEOBJECT_TYPE_SUMMONING_RITUAL
+        ObjectGuid getSummonTarget() const { return m_summonTarget; }
+        void SetSummonTarget(ObjectGuid o) { m_summonTarget = o; }
+        void FinishRitual();
         void AddUniqueUse(Player* player);
-        void AddUse() { ++m_useTimes; }
+        void RemoveUniqueUse(Player* player);
+        bool HasUniqueUser(Player* player);
+        uint32 GetUniqueUseCount();
 
+        void AddUse() { ++m_useTimes; }
         uint32 GetUseCount() const { return m_useTimes; }
-        uint32 GetUniqueUseCount() const { return m_UniqueUsers.size(); }
 
         void SaveRespawnTime();
 
@@ -704,6 +713,7 @@ class MANGOS_DLL_SPEC GameObject : public WorldObject
 
         bool IsVisible() const { return m_visible; }
         void SetVisible(bool b);
+
     protected:
         bool        m_visible;
         uint32      m_spellId;
@@ -723,6 +733,8 @@ class MANGOS_DLL_SPEC GameObject : public WorldObject
         // collected only for GAMEOBJECT_TYPE_SUMMONING_RITUAL
         ObjectGuid m_firstUser;                             // first GO user, in most used cases owner, but in some cases no, for example non-summoned multi-use GAMEOBJECT_TYPE_SUMMONING_RITUAL
         GuidsSet m_UniqueUsers;                             // all players who use item, some items activated after specific amount unique uses
+        std::mutex m_UniqueUsers_lock;
+        ObjectGuid m_summonTarget;                          // The player who is being summoned
 
         uint64 m_rotation;
         GameObjectInfo const* m_goInfo;

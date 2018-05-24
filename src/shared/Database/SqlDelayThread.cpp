@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +23,8 @@
 #include "Database/SqlOperations.h"
 #include "DatabaseEnv.h"
 
-SqlDelayThread::SqlDelayThread(Database* db, SqlConnection* conn) : m_dbEngine(db), m_dbConnection(conn), m_running(true)
+SqlDelayThread::SqlDelayThread(Database* db, SqlConnection* conn, int workerId)
+    : m_dbEngine(db), m_dbConnection(conn), m_running(true), m_workerId(workerId)
 {
 }
 
@@ -74,6 +77,13 @@ void SqlDelayThread::ProcessRequests()
 {
     SqlOperation* s = NULL;
     while (m_dbEngine->NextDelayedOperation(s))
+    {
+        s->Execute(m_dbConnection);
+        delete s;
+    }
+
+    // Process any serial operations for this worker
+    while (m_dbEngine->NextSerialDelayedOperation(m_workerId, s))
     {
         s->Execute(m_dbConnection);
         delete s;

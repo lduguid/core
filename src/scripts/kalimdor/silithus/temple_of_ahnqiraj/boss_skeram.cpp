@@ -19,14 +19,15 @@ EndScriptData */
 #define SPELL_EARTH_SHOCK           26194
 
 #define SPELL_TRUE_FULFILLMENT      785
+#define FULFILLMENT_RANGE           90.0f
 #define SPELL_TF_HASTE              2313
 #define SPELL_TF_MOD_HEAL           26525
 #define SPELL_TF_IMMUNITY           26526
-#define SPELL_TF_CANCEL             26589         
+#define SPELL_TF_CANCEL             26589
 
-#define SPELL_BLINK_1               4801
-#define SPELL_BLINK_2               8195
-#define SPELL_BLINK_3               20449
+#define SPELL_BLINK_0               4801
+#define SPELL_BLINK_1               8195
+#define SPELL_BLINK_2               20449
 
 #define SPELL_SUMMON_IMAGES         747
 
@@ -49,6 +50,7 @@ struct boss_skeramAI : public ScriptedAI
     float NextSplitPercent;
 
     Creature *ImageA, *ImageB;
+    ObjectGuid ControlledPlayerGUID;
 
     bool IsImage;
 
@@ -65,47 +67,60 @@ struct boss_skeramAI : public ScriptedAI
 
         ImageA = nullptr;
         ImageA = nullptr;
+        ControlledPlayerGUID.Clear();
+    }
+
+    void CancelFulfillment()
+    {
+        if (Player* FulfilledPlayer = m_creature->GetMap()->GetPlayer(ControlledPlayerGUID))
+        {
+            FulfilledPlayer->RemoveAurasDueToSpellByCancel(SPELL_TRUE_FULFILLMENT);
+            FulfilledPlayer->RemoveAurasDueToSpellByCancel(SPELL_TF_HASTE);
+            FulfilledPlayer->RemoveAurasDueToSpellByCancel(SPELL_TF_MOD_HEAL);
+            FulfilledPlayer->RemoveAurasDueToSpellByCancel(SPELL_TF_IMMUNITY);
+        }
+    }
+
+    void MoveInLineOfSight(Unit* pWho) override
+    {
+        // The bug trio have a larger than normal aggro radius
+        if (pWho->GetTypeId() == TYPEID_PLAYER && !m_creature->isInCombat() && m_creature->IsWithinDistInMap(pWho, 28.0f, true) && !pWho->HasAuraType(SPELL_AURA_FEIGN_DEATH))
+        {
+            AttackStart(pWho);
+        }
+        ScriptedAI::MoveInLineOfSight(pWho);
     }
 
     void KilledUnit(Unit* victim)
     {
-        if (IsImage)
-            return;
-
-        switch (urand(0,5))
+        switch (urand(0,8))
         {
             case 0: DoScriptText(SAY_SLAY_1, m_creature); break;
             case 1: DoScriptText(SAY_SLAY_2, m_creature); break;
             case 2: DoScriptText(SAY_SLAY_3, m_creature); break;
         }
-
     }
 
     void JustDied(Unit* Killer)
     {
         if (IsImage)
         {
-            if (Unit* victim = m_creature->GetCharm())
-            {
-                victim->RemoveAurasDueToSpellByCancel(SPELL_TF_HASTE);
-                victim->RemoveAurasDueToSpellByCancel(SPELL_TF_MOD_HEAL);
-                victim->RemoveAurasDueToSpellByCancel(SPELL_TF_IMMUNITY);
-            }
-
+            CancelFulfillment();
             m_creature->ForcedDespawn();
             return;
         }
-        
+        // Leave up to 20s of instant casts as reward for vaniquishing the True Prophet
         DoScriptText(SAY_DEATH, m_creature);
+        m_creature->SetRespawnDelay(7 * DAY);
 
         if (m_pInstance)
-            m_pInstance->SetData(TYPE_SKERAM, DONE); 
+            m_pInstance->SetData(TYPE_SKERAM, DONE);
     }
 
     void Aggro(Unit *who)
     {
-		if (IsImage)
-			return;
+        if (IsImage)
+            return;
 
         if (m_pInstance && m_pInstance->GetData(TYPE_SKERAM) == IN_PROGRESS)
             return;
@@ -123,24 +138,25 @@ struct boss_skeramAI : public ScriptedAI
 
     void JustReachedHome()
     {
-        if (m_pInstance)
-            m_pInstance->SetData(TYPE_SKERAM, FAIL);
+        CancelFulfillment();
 
         if (IsImage)
-            m_creature->ForcedDespawn();
+            m_creature->DoKillUnit();
+
+        if (m_pInstance)
+            m_pInstance->SetData(TYPE_SKERAM, FAIL);
     }
 
     void UpdateAI(const uint32 diff)
     {
         // Despawn Images instantly if the True Prophet died
         if (IsImage && m_pInstance && m_pInstance->GetData(TYPE_SKERAM) == DONE)
-            m_creature->ForcedDespawn();
+            m_creature->DoKillUnit();
 
         //Return since we have no target
         if (!m_creature->SelectHostileTarget() || !m_creature->getVictim())
             return;
 
-        //ArcaneExplosion_Timer
         if (ArcaneExplosion_Timer < diff)
         {
             if (DoCastSpellIfCan(m_creature->getVictim(), SPELL_ARCANE_EXPLOSION) == CAST_OK)
@@ -148,10 +164,10 @@ struct boss_skeramAI : public ScriptedAI
         }
         else ArcaneExplosion_Timer -= diff;
 
-        //If we are within range melee the target
+        //If we are within range, melee the target
         if (m_creature->IsWithinMeleeRange(m_creature->getVictim()))
             DoMeleeAttackIfReady();
-        else 
+        else
         // Target not in melee range. Spam Earthshock
         {
             if (EarthShock_Timer < diff)
@@ -159,35 +175,40 @@ struct boss_skeramAI : public ScriptedAI
                 if (DoCastSpellIfCan(m_creature->getVictim(), SPELL_EARTH_SHOCK) == CAST_OK)
                     EarthShock_Timer = 1000;
             }
-            else 
+            else
                 EarthShock_Timer -= diff;
         }
 
         if (FullFillment_Timer < diff)
         {
-            if (Unit* pTarget = m_creature->SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 1)) // Get random target except highest threat
+            // Get random target excluding highest threat who is not MCed
+            if (Unit* MCTarget = m_creature->SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 1))
             {
-                if (DoCastSpellIfCan(pTarget, SPELL_TRUE_FULFILLMENT, CAST_AURA_NOT_PRESENT) == CAST_OK)
+                if (DoCastSpellIfCan(MCTarget, SPELL_TRUE_FULFILLMENT, CAST_AURA_NOT_PRESENT) == CAST_OK)
                 {
-                    pTarget->CastSpell(pTarget, SPELL_TF_HASTE, true);		
-                    pTarget->CastSpell(pTarget, SPELL_TF_MOD_HEAL, true);
-                    pTarget->CastSpell(pTarget, SPELL_TF_IMMUNITY, true);
-                    FullFillment_Timer = urand(20000, 25000);
+                    // Cancel buffs on previous victim
+                    CancelFulfillment();
+
+                    m_creature->CastSpell(MCTarget, SPELL_TF_HASTE, true);
+                    m_creature->CastSpell(MCTarget, SPELL_TF_MOD_HEAL, true);
+                    m_creature->CastSpell(MCTarget, SPELL_TF_IMMUNITY, true);
+
+                    FullFillment_Timer = urand(20500, 25000);
+                    ControlledPlayerGUID = MCTarget->GetObjectGuid();
                 }
             }
         }
         else FullFillment_Timer -= diff;
 
-        //Blink_Timer
         if (Blink_Timer < diff)
         {
             CastBlink(m_creature);
             Blink_Timer = urand(10000, 18000);
         }
-        else 
+        else
             Blink_Timer -= diff;
 
-        //Summon 2 Images and teleport for every 25% hp lost
+        // Summon 2 Images and teleport for every 25% hp lost
         if (!IsImage && m_creature->GetHealthPercent() < NextSplitPercent)
             if (DoCastSpellIfCan(m_creature, SPELL_SUMMON_IMAGES) == CAST_OK)
             {
@@ -209,7 +230,7 @@ struct boss_skeramAI : public ScriptedAI
 
         float skeramPercent = m_creature->GetHealthPercent();
 
-        // Set health to look like the True Prophet. Will have 12.5%, 25%, finally 50% of max Skeram HP. 
+        // Set health to look like the True Prophet. Will have 12.5%, 25%, finally 50% of max Skeram HP.
         skeramImage->SetMaxHealth(m_creature->GetMaxHealth() * (12.5f / skeramPercent) * (100 / (int)skeramPercent));
         skeramImage->SetHealthPercent(skeramPercent);
         skeramImage->SetInCombatWithZone();
@@ -220,9 +241,9 @@ struct boss_skeramAI : public ScriptedAI
         else
         {
             ImageB = skeramImage;
-            UnisonBlink();              
+            UnisonBlink();
         }
-     
+
     }
 
     void UnisonBlink()
@@ -254,7 +275,7 @@ struct boss_skeramAI : public ScriptedAI
     // Teleport to a random position in mask
     // Can teleport to any position if mask = 0x7
     {
-        uint32 position = urand(0,2); 
+        uint32 position = urand(0,2);
 
         while (!(1 << position & choiceMask))                       // Bogo select
             position = urand(0, 2);
@@ -266,9 +287,9 @@ struct boss_skeramAI : public ScriptedAI
         // Blink to one of the three platforms
         switch (position)
         {
-            case 0: caster->CastSpell(caster, SPELL_BLINK_1, true); break;
-            case 1: caster->CastSpell(caster, SPELL_BLINK_2, true); break;
-            case 2: caster->CastSpell(caster, SPELL_BLINK_3, true); break;
+            case 0: caster->CastSpell(caster, SPELL_BLINK_0, true); break;
+            case 1: caster->CastSpell(caster, SPELL_BLINK_1, true); break;
+            case 2: caster->CastSpell(caster, SPELL_BLINK_2, true); break;
         }
 
         DoResetThreat();

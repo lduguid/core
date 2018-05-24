@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +24,7 @@
 #include <ace/OS_NS_unistd.h>
 #include <ace/Sched_Params.h>
 #include <vector>
+#include <chrono>
 
 using namespace ACE_Based;
 
@@ -186,6 +189,9 @@ void Thread::resume()
 
 ACE_THR_FUNC_RETURN Thread::ThreadTask(void * param)
 {
+    unsigned int seed = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    srand(seed);
+
     Runnable * _task = (Runnable*)param;
     _task->incReference();
     _task->run();

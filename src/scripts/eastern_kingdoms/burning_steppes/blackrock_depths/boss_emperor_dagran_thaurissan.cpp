@@ -48,12 +48,14 @@ struct boss_emperor_dagran_thaurissanAI : public ScriptedAI
     uint32 m_uiHandOfThaurissan_Timer;
     uint32 m_uiAvatarOfFlame_Timer;
     uint32 m_uiIronfoeTimer;
+    uint32 m_uiCallForHelp_Timer;
 
     void Reset()
     {
         m_uiHandOfThaurissan_Timer        = urand(5000, 7500);
         m_uiAvatarOfFlame_Timer           = 18000;
         m_uiIronfoeTimer                  = 9000;
+        m_uiCallForHelp_Timer             = 8000;
     }
 
     void Aggro(Unit* pWho)
@@ -105,6 +107,14 @@ struct boss_emperor_dagran_thaurissanAI : public ScriptedAI
         }
         else
             m_uiAvatarOfFlame_Timer -= uiDiff;
+
+        if (m_uiCallForHelp_Timer < uiDiff)
+        {
+            m_creature->CallForHelp(VISIBLE_RANGE);
+            m_uiCallForHelp_Timer = 20000;
+        }
+        else
+            m_uiCallForHelp_Timer -= uiDiff;
 
         /*
         if (m_uiIronfoeTimer < uiDiff)
@@ -211,7 +221,7 @@ struct boss_moira_bronzebeardAI : public ScriptedAI
         else
             m_uiSmite_Timer -= uiDiff;
 
-        //Heal_Timer
+        //healTimer
         if (m_uiHeal_Timer < uiDiff)
         {
             if (Creature* pEmperor = m_pInstance->instance->GetCreature(m_pInstance->GetData64(DATA_EMPEROR)))

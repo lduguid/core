@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -523,6 +525,44 @@ void WorldSession::HandleGroupChangeSubGroupOpcode(WorldPacket & recv_data)
     {
         if (ObjectGuid guid = sObjectMgr.GetPlayerGuidByName(name.c_str()))
             group->ChangeMembersGroup(guid, groupNr);
+    }
+}
+
+void WorldSession::HandleGroupSwapSubGroupOpcode(WorldPacket & recv_data)
+{
+    //DEBUG_LOG("WORLD: Recvd CMSG_GROUP_CHANGE_SUB_GROUP Message");
+    std::string name;
+    std::string nameSwapWith;
+
+    recv_data >> name;
+    recv_data >> nameSwapWith;
+
+    Group *group = GetPlayer()->GetGroup();
+    if (!group)
+        return;
+
+    /** error handling **/
+    if (!group->IsLeader(GetPlayer()->GetObjectGuid()) &&
+            !group->IsAssistant(GetPlayer()->GetObjectGuid()))
+        return;
+    /********************/
+    // If both players are online do swap with Player objects, else
+    // do swap with Guids
+    Player *player = sObjectMgr.GetPlayer(name.c_str());
+    Player *swapPlayer = sObjectMgr.GetPlayer(nameSwapWith.c_str());
+
+    if (player && swapPlayer)
+    {
+        group->SwapMembersGroup(player, swapPlayer);
+    }
+    else {
+        ObjectGuid swapGuid = sObjectMgr.GetPlayerGuidByName(name.c_str());
+        ObjectGuid swapWithGuid = sObjectMgr.GetPlayerGuidByName(nameSwapWith.c_str());
+
+        if (!swapGuid || !swapWithGuid)
+            return;
+
+        group->SwapMembersGroup(swapGuid, swapWithGuid);
     }
 }
 

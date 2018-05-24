@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +28,7 @@
 #include "ObjectAccessor.h"
 #include "Language.h"
 #include "AccountMgr.h"
+#include "ObjectMgr.h"
 #include "ScriptMgr.h"
 #include "SystemConfig.h"
 #include "revision.h"
@@ -107,6 +110,41 @@ bool ChatHandler::HandleStartCommand(char* /*args*/)
 
     // cast spell Stuck
     chr->CastSpell(chr, 7355, false);
+    return true;
+}
+
+bool ChatHandler::HandleUnstuckCommand(char* /*args*/)
+{
+    Player * pPlayer = m_session->GetPlayer();
+
+    if (!pPlayer)
+        return false;
+
+    if (pPlayer->isInCombat() || pPlayer->InBattleGround() || pPlayer->IsTaxiFlying() || pPlayer->HasSpellCooldown(20939) || (pPlayer->getDeathState() == CORPSE) || (pPlayer->getLevel() < 10))
+    {
+        SendSysMessage(LANG_UNSTUCK_UNAVAILABLE);
+        return false;
+    }
+
+    if (pPlayer->isAlive())
+    {
+        pPlayer->CastSpell(pPlayer, 20939, false);
+        SendSysMessage(LANG_UNSTUCK_ALIVE);
+    }
+    else
+    {
+        pPlayer->AddAura(15007); // Add Resurrection Sickness
+        pPlayer->AddSpellCooldown(20939, 0, time(nullptr) + 3600000); // Trigger 1 Hour Cooldown
+        // Get nearest graveyard.
+        WorldSafeLocsEntry const *ClosestGrave = sObjectMgr.GetClosestGraveYard(pPlayer->GetPositionX(), pPlayer->GetPositionY(), pPlayer->GetPositionZ(), pPlayer->GetMapId(), pPlayer->GetTeam());
+        if (!ClosestGrave) //No nearby graveyards (stuck in void?). Send ally to Westfall, Horde to Barrens.
+            ClosestGrave = pPlayer->GetTeamId() ? sWorldSafeLocsStore.LookupEntry(10) : sWorldSafeLocsStore.LookupEntry(4);
+        if (ClosestGrave)
+            pPlayer->TeleportTo(ClosestGrave->map_id, ClosestGrave->x, ClosestGrave->y, ClosestGrave->z, 0, 0);
+        SendSysMessage(LANG_UNSTUCK_DEAD);
+    }
+
+    sLog.outInfo("Player %s (guid %u) used unstuck command at map %u (%f, %f, %f).", pPlayer->GetName(), pPlayer->GetGUIDLow(), pPlayer->GetMapId(), pPlayer->GetPositionX(), pPlayer->GetPositionY(), pPlayer->GetPositionZ());
     return true;
 }
 

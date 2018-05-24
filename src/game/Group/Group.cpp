@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -631,10 +633,10 @@ void Group::MasterLoot(Creature *creature, Loot* loot)
             i->is_underthreshold = 1;
     }
 
-    uint32 real_count = 0;
+    uint32 playerCount = 0;
 
     WorldPacket data(SMSG_LOOT_MASTER_LIST, 330);
-    data << uint8(GetMembersCount());
+    data << uint8(0);
 
     for (GroupReference *itr = GetFirstMember(); itr != NULL; itr = itr->next())
     {
@@ -642,21 +644,23 @@ void Group::MasterLoot(Creature *creature, Loot* loot)
         if (!looter->IsInWorld())
             continue;
 
-        if (looter->IsWithinDistInMap(creature, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+        //if (looter->IsWithinDistInMap(creature, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+        if(looter->IsWithinLootXPDist(creature))
         {
             data << looter->GetObjectGuid();
-            ++real_count;
+            ++playerCount;
         }
     }
 
-    data.put<uint8>(0, real_count);
+    data.put<uint8>(0, playerCount);
 
     for (GroupReference *itr = GetFirstMember(); itr != NULL; itr = itr->next())
     {
         Player *looter = itr->getSource();
         if (!looter->IsInWorld())
             continue;
-        if (looter->IsWithinDistInMap(creature, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+        //if (looter->IsWithinDistInMap(creature, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+        if (looter->IsWithinLootXPDist(creature))
             looter->GetSession()->SendPacket(&data);
     }
 }
@@ -744,7 +748,8 @@ void Group::StartLootRoll(Creature* lootTarget, LootMethod method, Loot* loot, u
 
         if ((method != NEED_BEFORE_GREED || playerToRoll->CanUseItem(item) == EQUIP_ERR_OK) && lootItem.AllowedForPlayer(playerToRoll, lootTarget))
         {
-            if (playerToRoll->IsWithinDistInMap(lootTarget, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+            //if (playerToRoll->IsWithinDistInMap(lootTarget, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+            if (playerToRoll->IsWithinLootXPDist(lootTarget))
             {
                 r->playerVote[playerToRoll->GetObjectGuid()] = ROLL_NOT_EMITED_YET;
                 ++r->totalPlayersRolling;
@@ -1070,9 +1075,24 @@ void Group::UpdateOfflineLeader(time_t time, uint32 delay)
     // Do not update BG groups, BGs take care of offliners
     if (isBGGroup())
         return;
-    // Check for delay and leader presence
-    if ((time - m_leaderLastOnline) < delay || sObjectMgr.GetPlayer(m_leaderGuid))
+
+    // TODO: Maybe cache the world session for the leader, and only fetch if we hit a cache miss?
+    // Get the leader and leader session
+    uint32 leaderAcc = sObjectMgr.GetPlayerAccountIdByGUID(m_leaderGuid);
+    WorldSession* session = sWorld.FindSession(leaderAcc);
+    Player* leader = sObjectMgr.GetPlayer(m_leaderGuid);
+
+    // Check for delay, leader presence or if the leader is loading
+
+    if (leader)
+    {
+        m_leaderLastOnline = time;
         return;
+    }
+
+    if ((time - m_leaderLastOnline) < delay || (session && session->PlayerLoading()))
+        return;
+
     _chooseLeader(true);
 }
 
@@ -1373,6 +1393,31 @@ void Group::_removeRolls(ObjectGuid guid)
     }
 }
 
+bool Group::_swapMembersGroup(ObjectGuid guid, ObjectGuid swapGuid)
+{
+    // If we can't get a member slot for both members then the swap is impossible
+    member_witerator slot = _getMemberWSlot(guid);
+    if (slot == m_memberSlots.end())
+        return false;
+
+    member_witerator swapSlot = _getMemberWSlot(swapGuid);
+    if (swapSlot == m_memberSlots.end())
+        return false;
+
+    uint8 swapGroup = swapSlot->group;
+    swapSlot->group = slot->group;
+    slot->group = swapGroup;
+
+    // Don't need to change group counters since we are swapping
+    if (!isBGGroup())
+    {
+        CharacterDatabase.PExecute("UPDATE group_member SET subgroup='%u' WHERE memberGuid='%u'", slot->group, guid.GetCounter());
+        CharacterDatabase.PExecute("UPDATE group_member SET subgroup='%u' WHERE memberGuid='%u'", swapSlot->group, swapGuid.GetCounter());
+    }
+
+    return true;
+}
+
 bool Group::_setMembersGroup(ObjectGuid guid, uint8 group)
 {
     member_witerator slot = _getMemberWSlot(guid);
@@ -1461,7 +1506,11 @@ bool Group::SameSubGroup(Player const* member1, Player const* member2) const
 // allows setting subgroup for offline members
 void Group::ChangeMembersGroup(ObjectGuid guid, uint8 group)
 {
-    if (!isRaidGroup())
+    if (!isRaidGroup() || group >= MAX_RAID_SUBGROUPS)
+        return;
+
+    // Cannot put player in group if it would cause the group to overflow
+    if (m_subGroupsCounts && m_subGroupsCounts[group] >= MAX_GROUP_SIZE)
         return;
 
     Player *player = sObjectMgr.GetPlayer(guid);
@@ -1486,11 +1535,17 @@ void Group::ChangeMembersGroup(ObjectGuid guid, uint8 group)
 // only for online members
 void Group::ChangeMembersGroup(Player *player, uint8 group)
 {
-    if (!player || !isRaidGroup())
+    if (!player || !isRaidGroup() || group >= MAX_RAID_SUBGROUPS)
         return;
 
-    uint8 prevSubGroup = player->GetSubGroup();
-    if (prevSubGroup == group)
+    // Player's current subgroup may be from a battleground, so check
+    // subgroup in this Group
+    uint8 prevSubGroup = GetMemberGroup(player->GetObjectGuid());
+    if (prevSubGroup == group || prevSubGroup >= MAX_RAID_SUBGROUPS)
+        return;
+
+    // Cannot put player in group if it would cause the group to overflow
+    if (m_subGroupsCounts && m_subGroupsCounts[group] >= MAX_GROUP_SIZE)
         return;
 
     if (_setMembersGroup(player->GetObjectGuid(), group))
@@ -1509,6 +1564,85 @@ void Group::ChangeMembersGroup(Player *player, uint8 group)
     }
 }
 
+// One or both members are offline
+void Group::SwapMembersGroup(ObjectGuid guid, ObjectGuid swapGuid)
+{
+    if (!isRaidGroup())
+        return;
+
+    Player *player = sObjectMgr.GetPlayer(guid);
+    Player *swapPlayer = sObjectMgr.GetPlayer(swapGuid);
+
+    if (player && swapPlayer)
+        SwapMembersGroup(player, swapPlayer);
+    else
+    {
+        uint8 group = GetMemberGroup(guid);
+        uint8 swapGroup = GetMemberGroup(swapGuid);
+
+        // Same group, can't swap
+        if (group == swapGroup || group >= MAX_RAID_SUBGROUPS || swapGroup >= MAX_RAID_SUBGROUPS)
+            return;
+
+        if (_swapMembersGroup(guid, swapGuid))
+        {
+            // Player is online, update group refs
+            if (player)
+            {
+                if (player->GetGroup() == this)
+                    player->GetGroupRef().setSubGroup(swapGroup);
+                // BG group
+                else
+                    player->GetOriginalGroupRef().setSubGroup(swapGroup);
+            }
+
+            // Swap player is online, update group refs
+            if (swapPlayer)
+            {
+                if (swapPlayer->GetGroup() == this)
+                    swapPlayer->GetGroupRef().setSubGroup(group);
+                else
+                    swapPlayer->GetOriginalGroupRef().setSubGroup(group);
+            }
+
+            // Don't change group counters, we're swapping. Just update
+            SendUpdate();
+        }
+    }
+}
+
+// Both members online
+void Group::SwapMembersGroup(Player *player, Player *swapPlayer)
+{
+    if (!isRaidGroup() || !player || !swapPlayer)
+        return;
+
+    // Cannot swap players in the same sub group! Get groups from GetMemberGroup,
+    // as either player may be in a battleground and not have their current group
+    // set to this Group
+    uint8 group = GetMemberGroup(player->GetObjectGuid());
+    uint8 swapGroup = GetMemberGroup(swapPlayer->GetObjectGuid());
+
+    if (group == swapGroup || group >= MAX_RAID_SUBGROUPS || swapGroup >= MAX_RAID_SUBGROUPS)
+        return;
+
+    if (_swapMembersGroup(player->GetObjectGuid(), swapPlayer->GetObjectGuid()))
+    {
+        // One player may be in a BG group, the other not
+        if (player->GetGroup() == this)
+            player->GetGroupRef().setSubGroup(swapGroup);
+        // BG group
+        else
+            player->GetOriginalGroupRef().setSubGroup(swapGroup);
+
+        if (swapPlayer->GetGroup() == this)
+            swapPlayer->GetGroupRef().setSubGroup(group);
+        else
+            swapPlayer->GetOriginalGroupRef().setSubGroup(group);
+
+        SendUpdate();
+    }
+}
 
 uint32 Group::CanJoinBattleGroundQueue(BattleGroundTypeId bgTypeId, BattleGroundQueueTypeId bgQueueTypeId, uint32 MinPlayerCount, uint32 MaxPlayerCount)
 {
@@ -1904,7 +2038,8 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
         {
             // not update if only update if need and ok
             Player* looter = ObjectAccessor::FindPlayer(guid_itr->guid);
-            if (looter && looter->IsWithinDistInMap(pLootedObject, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+            //if (looter && looter->IsWithinDistInMap(pLootedObject, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+            if (looter && looter->IsWithinLootXPDist(pLootedObject))
                 return;
         }
         ++guid_itr;
@@ -1915,7 +2050,8 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
     for (member_citerator itr = guid_itr; itr != m_memberSlots.end(); ++itr)
     {
         if (Player* player = ObjectAccessor::FindPlayer(itr->guid))
-            if (player->IsWithinDistInMap(pLootedObject, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+            //if (player->IsWithinDistInMap(pLootedObject, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+            if (player->IsWithinLootXPDist(pLootedObject))
             {
                 pNewLooter = player;
                 break;
@@ -1928,7 +2064,8 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
         for (member_citerator itr = m_memberSlots.begin(); itr != guid_itr; ++itr)
         {
             if (Player* player = ObjectAccessor::FindPlayer(itr->guid))
-                if (player->IsWithinDistInMap(pLootedObject, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+                //if (player->IsWithinDistInMap(pLootedObject, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE), false))
+                if (player->IsWithinLootXPDist(pLootedObject))
                 {
                     pNewLooter = player;
                     break;
@@ -1948,5 +2085,18 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
     {
         SetLooterGuid(0);
         SendUpdate();
+    }
+
+    // SendUpdate clears the target icons, send an icon update
+    if (!isRaidGroup()) 
+    {
+        for (member_citerator citr = m_memberSlots.begin(); citr != m_memberSlots.end(); ++citr)
+        {
+            Player *player = sObjectMgr.GetPlayer(citr->guid);
+            if (!player || !player->GetSession() || player->GetGroup() != this)
+                continue;
+
+            SendTargetIconList(player->GetSession());
+        }
     }
 }

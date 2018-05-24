@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -107,7 +109,7 @@ void Log::InitSmartlogEntries(const std::string& str)
     while (ss)
     {
         ss >> entry;
-        m_smartlogExtraEntries.push_back(entry);        
+        m_smartlogExtraEntries.push_back(entry);
     }
 }
 
@@ -874,16 +876,19 @@ void Log::outCommand( uint32 account, const char * str, ... )
     fflush(stdout);
 }
 
-void Log::outWorldPacketDump( uint64 socket, uint32 opcode, char const* opcodeName, ByteBuffer const* packet, bool incoming )
+void Log::outWorldPacketDump(ACE_HANDLE socketHandle, uint32 opcode,
+                             char const* opcodeName, ByteBuffer const* packet,
+                             bool incoming)
 {
     if (!worldLogfile)
         return;
 
     outTimestamp(worldLogfile);
 
-    fprintf(worldLogfile,"\n%s:\nSOCKET: %llu\nLENGTH: %zu\nOPCODE: %s (0x%.4X)\nDATA:\n",
-        incoming ? "CLIENT" : "SERVER",
-        socket, packet->size(), opcodeName, opcode);
+    fprintf(worldLogfile,
+            "\n%s:\nSOCKET: %p\nLENGTH: %zu\nOPCODE: %s (0x%.4X)\nDATA:\n",
+            incoming ? "CLIENT" : "SERVER", socketHandle, packet->size(),
+            opcodeName, opcode);
 
     size_t p = 0;
     while (p < packet->size())

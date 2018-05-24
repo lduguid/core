@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -171,6 +173,10 @@ class MANGOS_DLL_SPEC GossipMenu
         void SetMenuId(uint32 menu_id) { m_gMenuId = menu_id; }
         uint32 GetMenuId() { return m_gMenuId; }
 
+        // used to avoid opening gossip menu at node discover
+        void SetDiscoveredNode() { m_discoveredNode = true; }
+        bool IsJustDiscoveredNode() { return m_discoveredNode; }
+
         void AddGossipMenuItemData(int32 action_menu, uint32 action_poi, uint32 action_script);
 
         unsigned int MenuItemCount() const
@@ -206,6 +212,7 @@ class MANGOS_DLL_SPEC GossipMenu
         GossipMenuItemDataList  m_gItemsData;
 
         uint32 m_gMenuId;
+        bool m_discoveredNode;
 
     private:
         WorldSession* m_session;
@@ -275,7 +282,7 @@ class MANGOS_DLL_SPEC PlayerMenu
         /*********************************************************/
         void SendQuestGiverStatus(uint8 questStatus, ObjectGuid npcGUID);
 
-        void SendQuestGiverQuestList(QEmote eEmote, const std::string& Title, ObjectGuid npcGUID);
+        void SendQuestGiverQuestList(QEmote eEmote, const std::string& Title, ObjectGuid guid);
 
         void SendQuestQueryResponse(Quest const *pQuest);
         void SendQuestGiverQuestDetails(Quest const *pQuest, ObjectGuid npcGUID, bool ActivateAccept);

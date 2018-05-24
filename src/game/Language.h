@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -91,7 +93,10 @@ enum MangosStrings
     LANG_GM_NO_WHISPER                  = 64,
     LANG_USING_SCRIPT_LIB_UNKNOWN       = 65,
     LANG_USING_SCRIPT_LIB_NONE          = 66,
-    // Room for more level 0              67-99 not used
+    LANG_UNSTUCK_UNAVAILABLE            = 67,
+    LANG_UNSTUCK_ALIVE                  = 68,
+    LANG_UNSTUCK_DEAD                   = 69,
+    // Room for more level 0              70-99 not used
 
     // level 1 chat
     LANG_GLOBAL_NOTIFY                  = 100,
@@ -560,6 +565,8 @@ enum MangosStrings
     LANG_PINFO_LEVEL                    = 549,
     LANG_PINFO_NO_REP                   = 550,
 
+    LANG_GROUP_INFO                     = 640,
+
     LANG_YOU_SET_EXPLORE_ALL            = 551,
     LANG_YOU_SET_EXPLORE_NOTHING        = 552,
     LANG_YOURS_EXPLORE_SET_ALL          = 553,
@@ -573,8 +580,8 @@ enum MangosStrings
     LANG_EXPLORE_AREA                   = 560,
     LANG_UNEXPLORE_AREA                 = 561,
 
-    //                                    562,              // not used
-    //                                    563,              // not used
+    LANG_GUILD_NOT_FOUND                = 562,
+    LANG_GUILD_INV_ERR                  = 563,
     LANG_TOO_BIG_INDEX                  = 564,
     LANG_SET_UINT                       = 565,              //log
     LANG_SET_UINT_FIELD                 = 566,
@@ -666,6 +673,7 @@ enum MangosStrings
     LANG_BG_AB_A_NEAR_VICTORY           = 664,
     LANG_BG_AB_H_NEAR_VICTORY           = 665,
     LANG_BG_MARK_BY_MAIL                = 666,
+    LANG_NARAIN_LETTER                  = 667,
 
     //LANG_BG_EY_HAS_TAKEN_A_M_TOWER    = 667,
     //LANG_BG_EY_HAS_TAKEN_H_M_TOWER    = 668,
@@ -804,7 +812,60 @@ enum MangosStrings
     LANG_GUILD_VETERAN                  = 813,
     LANG_GUILD_MEMBER                   = 814,
     LANG_GUILD_INITIATE                 = 815,
-    // Room for in-game strings           816-999 not used
+    // Room for in-game strings           816-899 not used
+
+    // More Modify Options
+    LANG_YOU_CHANGE_STR = 900,
+    LANG_YOURS_STR_CHANGED = 901,
+    LANG_YOU_CHANGE_AGI = 902,
+    LANG_YOURS_AGI_CHANGED = 903,
+    LANG_YOU_CHANGE_STA = 904,
+    LANG_YOURS_STA_CHANGED = 905,
+    LANG_YOU_CHANGE_INT = 906,
+    LANG_YOURS_INT_CHANGED = 907,
+    LANG_YOU_CHANGE_SPI = 908,
+    LANG_YOURS_SPI_CHANGED = 909,
+    LANG_YOU_CHANGE_ARMOR = 910,
+    LANG_YOURS_ARMOR_CHANGED = 911,
+    LANG_YOU_CHANGE_HOLY = 912,
+    LANG_YOURS_HOLY_CHANGED = 913,
+    LANG_YOU_CHANGE_FIRE = 914,
+    LANG_YOURS_FIRE_CHANGED = 915,
+    LANG_YOU_CHANGE_NATURE = 916,
+    LANG_YOURS_NATURE_CHANGED = 917,
+    LANG_YOU_CHANGE_FROST = 918,
+    LANG_YOURS_FROST_CHANGED = 919,
+    LANG_YOU_CHANGE_SHADOW = 920,
+    LANG_YOURS_SHADOW_CHANGED = 921,
+    LANG_YOU_CHANGE_ARCANE = 922,
+    LANG_YOURS_ARCANE_CHANGED = 923,
+    LANG_YOU_CHANGE_MELEEAP = 924,
+    LANG_YOURS_MELEEAP_CHANGED = 925,
+    LANG_YOU_CHANGE_RANGEDAP = 926,
+    LANG_YOURS_RANGEDAP_CHANGED = 927,
+    LANG_YOU_CHANGE_SP = 928,
+    LANG_YOURS_SP_CHANGED = 929,
+    LANG_YOU_CHANGE_MCRIT = 930,
+    LANG_YOURS_MCRIT_CHANGED = 931,
+    LANG_YOU_CHANGE_RCRIT = 932,
+    LANG_YOURS_RCRIT_CHANGED = 933,
+    LANG_YOU_CHANGE_SCRIT = 934,
+    LANG_YOURS_SCRIT_CHANGED = 935,
+    LANG_YOU_CHANGE_MHSPD = 936,
+    LANG_YOURS_MHSPD_CHANGED = 937,
+    LANG_YOU_CHANGE_OHSPD = 938,
+    LANG_YOURS_OHSPD_CHANGED = 939,
+    LANG_YOU_CHANGE_RSPD = 940,
+    LANG_YOURS_RSPD_CHANGED = 941,
+    LANG_YOU_CHANGE_CSPD = 942,
+    LANG_YOURS_CSPD_CHANGED = 943,
+    LANG_YOU_CHANGE_BLOCK = 944,
+    LANG_YOURS_BLOCK_CHANGED = 945,
+    LANG_YOU_CHANGE_DODGE = 946,
+    LANG_YOURS_DODGE_CHANGED = 947,
+    LANG_YOU_CHANGE_PARRY = 948,
+    LANG_YOURS_PARRY_CHANGED = 949,
+    // Room for in-game strings           950-999 not used
 
     // Level 4 (CLI only commands)
     LANG_COMMAND_EXIT                   = 1000,
@@ -910,7 +971,13 @@ enum MangosStrings
     LANG_SCRIPTS_WRONG_API              = 1167,
     LANG_SCRIPTS_RELOADED_OK            = 1168,
     LANG_SCRIPTS_OUTDATED               = 1169,
-    // Room for more level 3              1170-1199 not used
+    LANG_SET_LOCK_SUCCESS               = 1170,
+    LANG_SET_LOCK_USAGE                 = 1171,
+    LANG_REMOVE_RIDING_WRONG_TYPE       = 1172,
+    LANG_REMOVE_RIDING_NOT_HAVE         = 1173,
+    LANG_REMOVE_RIDING_ERROR            = 1174,
+    LANG_REMOVE_RIDING_SUCCESS          = 1175,
+    // Room for more level 3              1176-1199 not used
 
     // Debug commands
     LANG_CINEMATIC_NOT_EXIST            = 1200,

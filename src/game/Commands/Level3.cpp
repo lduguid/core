@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -323,6 +325,14 @@ bool ChatHandler::HandleReloadQuestTemplateCommand(char* /*args*/)
     sLog.outString("Re-Loading GameObjects for quests...");
     sObjectMgr.LoadGameObjectForQuests();
     SendSysMessage("Data GameObjects for quests reloaded.");
+    return true;
+}
+
+bool ChatHandler::HandleReloadQuestGreetingCommand(char* /*args*/)
+{
+    sLog.outString("Re-Loading Quest Greetings...");
+    sObjectMgr.LoadQuestGreetings();
+    SendSysMessage("DB table `quest_greeting` reloaded.");
     return true;
 }
 
@@ -960,6 +970,44 @@ bool ChatHandler::HandleAccountSetPasswordCommand(char* args)
     return true;
 }
 
+/// Set locked status for account
+bool ChatHandler::HandleAccountSetLockedCommand(char* args)
+{
+    ///- Get the command line arguments
+    char* accountStr = ExtractOptNotLastArg(&args);
+
+    std::string account_name;
+    uint32 account_id = ExtractAccountId(&accountStr, &account_name);
+    if (!account_id)
+        return false;
+
+    // Let set locked state only for lesser (strong) security level
+    // or to self account
+    if (GetAccountId() && GetAccountId() != account_id &&
+        HasLowerSecurityAccount(NULL, account_id, true))
+        return false;
+
+    uint32 value;
+    if (!ExtractUInt32(&args, value))
+    {
+        PSendSysMessage(LANG_SET_LOCK_USAGE);
+        return false;
+    }
+
+    if (value < 16)
+    {
+        LoginDatabase.PExecute("UPDATE account SET locked = '%u' WHERE id = '%u'", value, account_id);
+        PSendSysMessage(LANG_SET_LOCK_SUCCESS, account_name.c_str(), account_id, value);
+    }
+    else
+    {
+        PSendSysMessage(LANG_SET_LOCK_USAGE);
+        return false;
+    }
+
+    return true;
+}
+
 bool ChatHandler::HandleMaxSkillCommand(char* /*args*/)
 {
     Player* SelectedPlayer = getSelectedPlayer();
@@ -1032,6 +1080,197 @@ bool ChatHandler::HandleSetSkillCommand(char* args)
     target->SetSkill(skill, level, maxskill);
     PSendSysMessage(LANG_SET_SKILL, skill, sl->name[GetSessionDbcLocale()], tNameLink.c_str(), level, maxskill);
 
+    return true;
+}
+
+bool ChatHandler::HandleRemoveRidingCommand(char* args)
+{
+    static const std::unordered_map<std::string, uint32> skills
+    {
+        { "75", 33388 }, { "150", 33391 }, { "apprentice", 33388 }, { "journeyman", 33391 },
+        { "horse", 824 }, { "kodo", 18995 }, { "ram", 826 }, { "raptor", 10861 },
+        { "tiger", 828 }, { "wolf", 825 }
+    };
+
+    Player* player;
+    ObjectGuid target_guid;
+    std::string name;
+
+    ExtractPlayerTarget(&args, &player, &target_guid, &name);
+
+    if (!player && name.empty())
+    {
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    auto it = skills.find(args);
+    
+    if (it == skills.end())
+    {
+        std::stringstream options;
+
+        for (auto& entry : skills)
+        {
+            options << entry.first << " ";
+        }
+
+        PSendSysMessage(LANG_REMOVE_RIDING_WRONG_TYPE, options.str().c_str());
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    if (player)
+    {
+        player->removeSpell(it->second, false, false);
+        player->SaveToDB(); // make sure we don't lose this change if the world crashes
+    }
+    else
+    {
+        QueryResult *result = nullptr;
+        if (it->second == 33388) // When removing Apprentice Riding check for Journeyman too. It replaces the first spell.
+            result = CharacterDatabase.PQuery("SELECT spell FROM character_spell WHERE guid = %u AND spell IN (33388, 33391)", target_guid.GetCounter());
+        else
+            result = CharacterDatabase.PQuery("SELECT spell FROM character_spell WHERE guid = %u AND spell = %u", target_guid.GetCounter(), it->second);
+
+        if (!result)
+        {
+            PSendSysMessage(LANG_REMOVE_RIDING_NOT_HAVE, it->first.c_str());
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        // remove the riding skill
+        switch (it->second)
+        {
+            // Horse Riding
+            case 824:
+            {
+                if (!CharacterDatabase.PExecute("DELETE FROM character_skills WHERE skill = 148 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Wolf Riding
+            case 825:
+            {
+                if (!CharacterDatabase.PExecute("DELETE FROM character_skills WHERE skill = 149 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Ram Riding
+            case 826:
+            {
+                if (!CharacterDatabase.PExecute("DELETE FROM character_skills WHERE skill = 152 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Tiger Riding
+            case 828:
+            {
+                if (!CharacterDatabase.PExecute("DELETE FROM character_skills WHERE skill = 150 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Raptor Riding
+            case 10861:
+            {
+                if (!CharacterDatabase.PExecute("DELETE FROM character_skills WHERE skill = 533 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Kodo Riding
+            case 18995:
+            {
+                if (!CharacterDatabase.PExecute("DELETE FROM character_skills WHERE skill = 713 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Apprentice Riding
+            case 33388:
+            {
+                if (!CharacterDatabase.PExecute("DELETE FROM character_skills WHERE skill = 762 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Journeyman Riding
+            case 33391:
+            {
+                if (!CharacterDatabase.PExecute("UPDATE character_skills SET value = 75, max = 75 WHERE skill = 762 AND value = 150 AND max = 150 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+        }
+
+        // remove the riding spell
+        if (!CharacterDatabase.PExecute("DELETE FROM character_spell WHERE spell = %u AND guid = %u", it->second, target_guid.GetCounter()))
+        {
+            SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        switch (it->second)
+        {
+            // Apprentice Riding
+            case 33388:
+            {
+                // Remove Journeyman Riding too or it does nothing if he has it.
+                if (!CharacterDatabase.PExecute("DELETE FROM character_spell WHERE spell = 33391 AND guid = %u", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+            // Journeyman Riding
+            case 33391:
+            {
+                // Add Apprentice Riding spell.
+                if (!CharacterDatabase.PExecute("INSERT INTO character_spell VALUES (%u, 33388, 1, 0)", target_guid.GetCounter()))
+                {
+                    SendSysMessage(LANG_REMOVE_RIDING_ERROR);
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                break;
+            }
+        }
+    }
+
+    PSendSysMessage(LANG_REMOVE_RIDING_SUCCESS, name.c_str()); // check
     return true;
 }
 
@@ -2029,6 +2268,155 @@ bool ChatHandler::HandleAddItemCommand(char* args)
     if (noSpaceForCount > 0)
         PSendSysMessage(LANG_ITEM_CANNOT_CREATE, itemId, noSpaceForCount);
 
+    return true;
+}
+
+bool ChatHandler::HandleDeleteItemCommand(char* args)
+{
+    char* cId = ExtractKeyFromLink(&args, "Hitem");
+
+    if (!cId)
+    {
+        return false;
+    }
+
+    uint32 itemId = 0;
+
+    if (!ExtractUInt32(&cId, itemId))
+    {
+        std::string itemName = cId;
+        WorldDatabase.escape_string(itemName);
+
+        std::unique_ptr<QueryResult> result(WorldDatabase.PQuery("SELECT entry FROM item_template WHERE name = '%s'", itemName.c_str()));
+
+        if (!result)
+        {
+            PSendSysMessage(LANG_COMMAND_COULDNOTFIND, cId);
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        itemId = result->Fetch()->GetUInt16();
+    }
+
+    uint32 count;
+
+    if (!ExtractOptUInt32(&args, count, 1))
+    {
+        return false;
+    }
+
+    Player* player;
+    ObjectGuid target_guid;
+    std::string target_name;
+
+    if (!ExtractPlayerTarget(&args, &player, &target_guid, &target_name))
+    {
+        return false;
+    }
+
+    DETAIL_LOG(GetMangosString(LANG_REMOVEITEM), itemId, count);
+
+    if (player)
+    {
+        if (!player->HasItemCount(itemId, count, true))
+        {
+            PSendSysMessage("Cannot remove %u instances of %u - maximum value is %u", count, itemId, player->GetItemCount(itemId, true));
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        player->DestroyItemCount(itemId, count, true, false, true);
+        player->SaveInventoryAndGoldToDB();
+    }
+    else
+    {
+        std::unique_ptr<QueryResult> result(CharacterDatabase.PQuery(
+            "SELECT SUM(count) AS item_count FROM item_instance ii WHERE itemEntry = %u and owner_guid = %u",
+            itemId, target_guid.GetCounter()
+        ));
+
+        uint32 maxItemCount = 0;
+
+        if (result)
+        {
+            auto fields = result->Fetch();
+            maxItemCount = fields[0].GetUInt32();
+        }
+
+        if (count > maxItemCount)
+        {
+            PSendSysMessage("Cannot remove %u instances of %u - maximum value is %u", count, itemId, maxItemCount);
+            SetSentErrorMessage(true);
+            return false;
+        }
+
+        while (count)
+        {
+            result.reset(CharacterDatabase.PQuery(
+                "SELECT guid, count FROM item_instance ii WHERE itemEntry = %u and owner_guid = %u ORDER BY count DESC",
+                itemId, target_guid.GetCounter()
+            ));
+
+            if (!result)
+            {
+                SendSysMessage("Encountered an error while attempting to locate items to remove - race condition?");
+                SetSentErrorMessage(true);
+                return false;
+            }
+
+            auto fields = result->Fetch();
+            auto guid = fields[0].GetUInt32();
+            auto stackCount = fields[1].GetUInt32();
+
+            if (stackCount > count) // make sure we don't delete more than requested
+            {
+                if (!CharacterDatabase.PExecute("UPDATE item_instance SET count = %u WHERE guid = %u",
+                    stackCount - count, guid))
+                {
+                    SendSysMessage("Encountered an error while attempting to adjust item stack count");
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+
+                break;
+            }
+            else
+            {
+                if (!CharacterDatabase.DirectPExecute("DELETE FROM item_instance WHERE guid = %u", guid))
+                {
+                    SendSysMessage("Encountered an error while attempting to remove item instance");
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+                
+                if (!CharacterDatabase.DirectPExecute("DELETE FROM character_inventory WHERE item = %u", guid))
+                {
+                    SendSysMessage("Encountered an error while attempting to remove item from inventory");
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+
+                if (!CharacterDatabase.DirectPExecute("DELETE FROM character_gifts WHERE item_guid = %u", guid))
+                {
+                    SendSysMessage("Encountered an error while attempting to remove item from gifts");
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+
+                if (!CharacterDatabase.DirectPExecute("DELETE FROM mail_items WHERE item_guid = %u", guid))
+                {
+                    SendSysMessage("Encountered an error while attempting to remove item from mail");
+                    SetSentErrorMessage(true);
+                    return false;
+                }
+
+                count -= stackCount;
+            }
+        }
+    }
+
+    PSendSysMessage(LANG_REMOVEITEM, itemId, count, target_name.c_str());
     return true;
 }
 
@@ -3092,7 +3480,11 @@ bool ChatHandler::HandleGuildInviteCommand(char *args)
     // if not guild name only (in "") then player name
     ObjectGuid target_guid;
     if (!ExtractPlayerTarget(&nameStr, NULL, &target_guid))
+    {
+        SendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
         return false;
+    }
 
     char* guildStr = ExtractQuotedArg(&args);
     if (!guildStr)
@@ -3101,12 +3493,43 @@ bool ChatHandler::HandleGuildInviteCommand(char *args)
     std::string glName = guildStr;
     Guild* targetGuild = sGuildMgr.GetGuildByName(glName);
     if (!targetGuild)
+    {
+        SendSysMessage(LANG_GUILD_NOT_FOUND);
+        SetSentErrorMessage(true);
         return false;
+    }
 
     // player's guild membership checked in AddMember before add
-    if (!targetGuild->AddMember(target_guid, targetGuild->GetLowestRank()))
-        return false;
+    auto status = targetGuild->AddMember(target_guid, targetGuild->GetLowestRank());
 
+    if (status != GuildAddStatus::OK)
+    {
+        std::string error;
+
+        switch (status) // bad
+        {
+            case GuildAddStatus::ALREADY_IN_GUILD:
+                error = "Player is already in a guild.";
+                break;
+            case GuildAddStatus::GUILD_FULL:
+                error = "The target guild is full.";
+                break;
+            case GuildAddStatus::PLAYER_DATA_ERROR:
+                error = "Player data appears to be corrupt - tell an administrator.";
+                break;
+            case GuildAddStatus::UNKNOWN_PLAYER:
+                error = "Unable to find target player.";
+                break;
+            default:
+                error = "Unhandled guild invite error.";
+        }
+
+        SendSysMessage(error.c_str());
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    PSendSysMessage("Player added to %s.", glName.c_str());
     return true;
 }
 
@@ -3117,13 +3540,18 @@ bool ChatHandler::HandleGuildUninviteCommand(char *args)
     if (!ExtractPlayerTarget(&args, &target, &target_guid))
         return false;
 
-    uint32 glId   = target ? target->GetGuildId() : Player::GetGuildIdFromDB(target_guid);
+    uint32 glId = target ? target->GetGuildId() : Player::GetGuildIdFromDB(target_guid);
+
     if (!glId)
         return false;
 
     Guild* targetGuild = sGuildMgr.GetGuildById(glId);
     if (!targetGuild)
+    {
+        SendSysMessage(LANG_GUILD_NOT_FOUND);
+        SetSentErrorMessage(true);
         return false;
+    }
 
     if (targetGuild->DelMember(target_guid))
     {
@@ -3144,9 +3572,14 @@ bool ChatHandler::HandleGuildRankCommand(char *args)
     if (!ExtractPlayerTarget(&nameStr, &target, &target_guid, &target_name))
         return false;
 
-    uint32 glId   = target ? target->GetGuildId() : Player::GetGuildIdFromDB(target_guid);
+    uint32 glId = target ? target->GetGuildId() : Player::GetGuildIdFromDB(target_guid);
+
     if (!glId)
+    {
+        SendSysMessage(LANG_GUILD_NOT_FOUND);
+        SetSentErrorMessage(true);
         return false;
+    }
 
     Guild* targetGuild = sGuildMgr.GetGuildById(glId);
     if (!targetGuild)
@@ -3179,8 +3612,13 @@ bool ChatHandler::HandleGuildDeleteCommand(char* args)
     std::string gld = guildStr;
 
     Guild* targetGuild = sGuildMgr.GetGuildByName(gld);
+
     if (!targetGuild)
+    {
+        SendSysMessage(LANG_GUILD_NOT_FOUND);
+        SetSentErrorMessage(true);
         return false;
+    }
 
     targetGuild->Disband();
     delete targetGuild;
@@ -3257,6 +3695,53 @@ bool ChatHandler::HandleDieCommand(char* /*args*/)
             target->DealDamage(target, target->GetHealth(), NULL, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, NULL, false);
         }
     }
+
+    return true;
+}
+
+bool ChatHandler::HandleFearCommand(char* /*args*/)
+{
+    Unit* target = getSelectedUnit();
+
+    if (!target || !m_session->GetPlayer()->GetSelectionGuid())
+    {
+        SendSysMessage(LANG_SELECT_CHAR_OR_CREATURE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    const uint32 fearID = 26641;
+
+    SpellEntry const *spellInfo = sSpellMgr.GetSpellEntry(fearID);
+    if (!spellInfo)
+        return false;
+
+    if (!IsSpellAppliesAura(spellInfo, (1 << EFFECT_INDEX_0) | (1 << EFFECT_INDEX_1) | (1 << EFFECT_INDEX_2)) &&
+        !IsSpellHaveEffect(spellInfo, SPELL_EFFECT_PERSISTENT_AREA_AURA))
+    {
+        PSendSysMessage(LANG_SPELL_NO_HAVE_AURAS, fearID);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    SpellAuraHolder *holder = CreateSpellAuraHolder(spellInfo, target, m_session->GetPlayer());
+
+    for (uint32 i = 0; i < MAX_EFFECT_INDEX; ++i)
+    {
+        uint8 eff = spellInfo->Effect[i];
+        if (eff >= TOTAL_SPELL_EFFECTS)
+            continue;
+        if (IsAreaAuraEffect(eff) ||
+            eff == SPELL_EFFECT_APPLY_AURA ||
+            eff == SPELL_EFFECT_PERSISTENT_AREA_AURA)
+        {
+            Aura *aur = CreateAura(spellInfo, SpellEffectIndex(i), NULL, holder, target);
+            holder->AddAura(aur, SpellEffectIndex(i));
+        }
+    }
+
+    if (!target->AddSpellAuraHolder(holder))
+        holder = nullptr;
 
     return true;
 }
@@ -3403,7 +3888,8 @@ bool ChatHandler::HandleAuraCommand(char* args)
             holder->AddAura(aur, SpellEffectIndex(i));
         }
     }
-    target->AddSpellAuraHolder(holder);
+    if (!target->AddSpellAuraHolder(holder))
+        holder = nullptr;
 
     return true;
 }
@@ -4488,18 +4974,14 @@ bool ChatHandler::HandleServerIdleShutDownCommand(char* args)
 
 bool ChatHandler::HandleQuestAddCommand(char* args)
 {
-    Player* player = getSelectedPlayer();
-    if (!player)
-    {
-        SendSysMessage(LANG_NO_CHAR_SELECTED);
-        SetSentErrorMessage(true);
-        return false;
-    }
-
     // .addquest #entry'
     // number or [name] Shift-click form |color|Hquest:quest_id:quest_level|h[name]|h|r
     uint32 entry;
     if (!ExtractUint32KeyFromLink(&args, "Hquest", entry))
+        return false;
+
+    Player* player;
+    if (!ExtractPlayerTarget(&args, &player, NULL, NULL))
         return false;
 
     Quest const* pQuest = sObjectMgr.GetQuestTemplate(entry);
@@ -4534,23 +5016,20 @@ bool ChatHandler::HandleQuestAddCommand(char* args)
             player->CompleteQuest(entry);
     }
 
+    PSendSysMessage("Quest %u added for %s.", entry, player->GetName());
     return true;
 }
 
 bool ChatHandler::HandleQuestRemoveCommand(char* args)
 {
-    Player* player = getSelectedPlayer();
-    if (!player)
-    {
-        SendSysMessage(LANG_NO_CHAR_SELECTED);
-        SetSentErrorMessage(true);
-        return false;
-    }
-
     // .removequest #entry'
     // number or [name] Shift-click form |color|Hquest:quest_id:quest_level|h[name]|h|r
     uint32 entry;
     if (!ExtractUint32KeyFromLink(&args, "Hquest", entry))
+        return false;
+
+    Player* player;
+    if (!ExtractPlayerTarget(&args, &player, NULL, NULL))
         return false;
 
     Quest const* pQuest = sObjectMgr.GetQuestTemplate(entry);
@@ -4571,7 +5050,7 @@ bool ChatHandler::HandleQuestRemoveCommand(char* args)
             player->SetQuestSlot(slot, 0);
 
             // we ignore unequippable quest items in this case, its' still be equipped
-            player->TakeQuestSourceItem(quest, false);
+            player->TakeOrReplaceQuestStartItems(quest, false, true);
         }
     }
 
@@ -4585,25 +5064,60 @@ bool ChatHandler::HandleQuestRemoveCommand(char* args)
     return true;
 }
 
-bool ChatHandler::HandleQuestStatusCommand(char* args)
+// WTB std::optional
+QuestStatusData HandleQuestStatusCommandHelper(uint32 quest_id, const Player* player,
+    const ObjectGuid* guid)
 {
-    Player* player = getSelectedPlayer();
-    if (!player)
+    QuestStatusData data;
+    data.m_status = QuestStatus::QUEST_STATUS_NONE;
+
+    if (player)
     {
-        SendSysMessage(LANG_NO_CHAR_SELECTED);
-        SetSentErrorMessage(true);
-        return false;
+        auto tmpQuestData = player->GetQuestStatusData(quest_id);
+
+        if (tmpQuestData)
+        {
+            data = *tmpQuestData;
+        }
+    }
+    else
+    {
+        std::unique_ptr<QueryResult> result(CharacterDatabase.PQuery(
+            "SELECT status, rewarded, reward_choice FROM character_queststatus WHERE guid = %u AND quest = %u",
+            guid->GetCounter(), quest_id
+        ));
+
+        if (!result || result->GetRowCount() == 0)
+        {
+            return data;
+        }
+
+        auto fields = result->Fetch();
+        data.m_status = QuestStatus(fields[0].GetUInt32());
+        data.m_rewarded = fields[1].GetBool();
+        data.m_reward_choice = fields[2].GetUInt32();
     }
 
+    return data;
+}
+
+bool ChatHandler::HandleQuestStatusCommand(char* args)
+{
     // .quest complete #entry
     // number or [name] Shift-click form |color|Hquest:quest_id:quest_level|h[name]|h|r
     uint32 entry;
     if (!ExtractUint32KeyFromLink(&args, "Hquest", entry))
         return false;
-    
+
+    Player* player;
+    std::string name;
+    ObjectGuid guid;
+
+    if (!ExtractPlayerTarget(&args, &player, &guid, &name))
+        return false;
+
     Quest const* quest = sObjectMgr.GetQuestTemplate(entry);
 
-    // If player doesn't have the quest
     if (!quest)
     {
         PSendSysMessage(LANG_COMMAND_QUEST_NOTFOUND, entry);
@@ -4611,7 +5125,32 @@ bool ChatHandler::HandleQuestStatusCommand(char* args)
         return false;
     }
 
-    PSendSysMessage("Quest ID: %u - [%s]", entry, QuestStatusToString(player->GetQuestStatus(entry)));
+    QuestStatusData questData = HandleQuestStatusCommandHelper(entry, player, &guid);
+
+    std::stringstream rewardInfo;
+
+    if (questData.m_rewarded && questData.m_reward_choice)
+    {
+        rewardInfo << "item: " << questData.m_reward_choice << " ";
+
+        const auto itemProto = sItemStorage.LookupEntry<ItemPrototype>(questData.m_reward_choice);
+
+        if (itemProto)
+        {
+            rewardInfo << "[" << itemProto->Name1 << "]";
+        }
+        else
+        {
+            rewardInfo << "[invalid item entry?]";
+        }
+    }
+    else
+    {
+        rewardInfo << "no reward data recorded";
+    }
+
+    PSendSysMessage("Quest ID: %u - [%s] - Rewarded: %s (%s)", entry, QuestStatusToString(questData.m_status),
+        questData.m_rewarded? "Yes" : "No", rewardInfo.str().c_str());
 
     Quest const* prevQuest = quest;
 
@@ -4620,16 +5159,18 @@ bool ChatHandler::HandleQuestStatusCommand(char* args)
     {
         if (Quest const* quest = sObjectMgr.GetQuestTemplate(prevQuest->GetPrevQuestId()))
         {
+            questData = HandleQuestStatusCommandHelper(quest->GetQuestId(), player, &guid);
+
             if (quest->GetNextQuestInChain() == prevQuest->GetQuestId())
             {
                 uint32 id = quest->GetQuestId();
-                PSendSysMessage("%u. [PreventInChain] Quest ID: %u - [%s]", pos, id, QuestStatusToString(player->GetQuestStatus(id)));
+                PSendSysMessage("%u. [PreventInChain] Quest ID: %u - [%s]", pos, id, QuestStatusToString(questData.m_status));
                 prevQuest = quest;
             }
             else
             {
                 uint32 id = quest->GetQuestId();
-                PSendSysMessage("%u. [Prevent] Quest ID: %u - [%s]", pos, id, QuestStatusToString(player->GetQuestStatus(id)));
+                PSendSysMessage("%u. [Prevent] Quest ID: %u - [%s]", pos, id, QuestStatusToString(questData.m_status));
                 prevQuest = quest;
             }
         } else break;
@@ -4640,18 +5181,14 @@ bool ChatHandler::HandleQuestStatusCommand(char* args)
 
 bool ChatHandler::HandleQuestCompleteCommand(char* args)
 {
-    Player* player = getSelectedPlayer();
-    if (!player)
-    {
-        SendSysMessage(LANG_NO_CHAR_SELECTED);
-        SetSentErrorMessage(true);
-        return false;
-    }
-
     // .quest complete #entry
     // number or [name] Shift-click form |color|Hquest:quest_id:quest_level|h[name]|h|r
     uint32 entry;
     if (!ExtractUint32KeyFromLink(&args, "Hquest", entry))
+        return false;
+
+    Player* player;
+    if (!ExtractPlayerTarget(&args, &player, NULL, NULL))
         return false;
 
     Quest const* pQuest = sObjectMgr.GetQuestTemplate(entry);
@@ -4664,6 +5201,8 @@ bool ChatHandler::HandleQuestCompleteCommand(char* args)
         return false;
     }
     player->FullQuestComplete(entry);
+
+    PSendSysMessage("Quest %u completed for %s.", entry, player->GetName());
     return true;
 }
 
@@ -6381,6 +6920,36 @@ bool ChatHandler::HandleSendMessageCommand(char* args)
     return true;
 }
 
+bool ChatHandler::HandleModifyCrCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Unit* target = getSelectedUnit();
+    if (!target) return false;
+    float f;
+    if (!ExtractFloat(&args, f))
+        return false;
+
+    target->SetFloatValue(UNIT_FIELD_COMBATREACH, f);
+    return true;
+}
+
+bool ChatHandler::HandleModifyBrCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Unit* target = getSelectedUnit();
+    if (!target) return false;
+    float f;
+    if (!ExtractFloat(&args, f))
+        return false;
+
+    target->SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, f);
+    return true;
+}
+
 bool ChatHandler::HandleModifyGenderCommand(char *args)
 {
     if (!*args)
@@ -6442,6 +7011,897 @@ bool ChatHandler::HandleModifyGenderCommand(char *args)
     return true;
 }
 
+bool ChatHandler::HandleModifyStrengthCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetModifierValue(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, (float) amount);
+    player->UpdateAllStats();
+
+    PSendSysMessage(LANG_YOU_CHANGE_STR, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_STR_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyAgilityCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetModifierValue(UNIT_MOD_STAT_AGILITY, BASE_VALUE, (float) amount);
+    player->UpdateAllStats();
+
+    PSendSysMessage(LANG_YOU_CHANGE_AGI, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_AGI_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyStaminaCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetModifierValue(UNIT_MOD_STAT_STAMINA, BASE_VALUE, (float)amount);
+    player->UpdateAllStats();
+
+    PSendSysMessage(LANG_YOU_CHANGE_STA, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_STA_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyIntellectCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetModifierValue(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, (float) amount);
+    player->UpdateAllStats();
+
+    PSendSysMessage(LANG_YOU_CHANGE_INT, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_INT_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifySpiritCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetModifierValue(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, (float) amount);
+    player->UpdateAllStats();
+
+    PSendSysMessage(LANG_YOU_CHANGE_SPI, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_SPI_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyArmorCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RESISTANCES, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_ARMOR, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_ARMOR_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyHolyCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RESISTANCES_01, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_HOLY, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_HOLY_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyFireCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RESISTANCES_02, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_FIRE, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_FIRE_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyNatureCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RESISTANCES_03, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_NATURE, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_NATURE_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyFrostCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RESISTANCES_04, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_FROST, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_FROST_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyShadowCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RESISTANCES_05, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_SHADOW, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_SHADOW_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyArcaneCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RESISTANCES_06, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_ARCANE, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_ARCANE_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyMeleeApCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount <= 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_ATTACK_POWER, amount);
+    player->UpdateDamagePhysical(BASE_ATTACK);
+    player->UpdateDamagePhysical(OFF_ATTACK);
+
+    PSendSysMessage(LANG_YOU_CHANGE_MELEEAP, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_MELEEAP_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyRangedApCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount <= 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER, amount);
+    player->UpdateDamagePhysical(RANGED_ATTACK);
+
+    PSendSysMessage(LANG_YOU_CHANGE_RANGEDAP, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_RANGEDAP_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifySpellPowerCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    // dunno where spell power is stored so using a custom spell
+    player->RemoveAurasDueToSpell(30776);
+    player->CastCustomSpell(player, 30776, &amount, &amount, NULL, true);
+
+    PSendSysMessage(LANG_YOU_CHANGE_SP, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_SP_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyMeleeCritCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float amount;
+    if (!ExtractFloat(&args, amount))
+        return false;
+
+    if (amount < 0 || amount > 100)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetStatFloatValue(PLAYER_CRIT_PERCENTAGE, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_MCRIT, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_MCRIT_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyRangedCritCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float amount;
+    if (!ExtractFloat(&args, amount))
+        return false;
+
+    if (amount < 0 || amount > 100)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetStatFloatValue(PLAYER_RANGED_CRIT_PERCENTAGE, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_RCRIT, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_RCRIT_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifySpellCritCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float amount;
+    if (!ExtractFloat(&args, amount))
+        return false;
+
+    if (amount < 0 || amount > 100)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->m_SpellCritPercentage[SPELL_SCHOOL_NORMAL] = amount;
+    player->m_SpellCritPercentage[SPELL_SCHOOL_HOLY] = amount;
+    player->m_SpellCritPercentage[SPELL_SCHOOL_FIRE] = amount;
+    player->m_SpellCritPercentage[SPELL_SCHOOL_NATURE] = amount;
+    player->m_SpellCritPercentage[SPELL_SCHOOL_FROST] = amount;
+    player->m_SpellCritPercentage[SPELL_SCHOOL_SHADOW] = amount;
+    player->m_SpellCritPercentage[SPELL_SCHOOL_ARCANE] = amount;
+
+    PSendSysMessage(LANG_YOU_CHANGE_SCRIT, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_SCRIT_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyMainSpeedCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount <= 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetFloatValue(UNIT_FIELD_BASEATTACKTIME, (float) amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_MHSPD, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_MHSPD_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyOffSpeedCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount <= 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetFloatValue(UNIT_FIELD_OFFHANDATTACKTIME, (float) amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_OHSPD, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_OHSPD_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyRangedSpeedCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    int32 amount;
+    if (!ExtractInt32(&args, amount))
+        return false;
+
+    if (amount <= 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetFloatValue(UNIT_FIELD_RANGEDATTACKTIME, (float) amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_RSPD, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_RSPD_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyCastSpeedCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float amount;
+    if (!ExtractFloat(&args, amount))
+        return false;
+
+    if (amount < 0)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetFloatValue(UNIT_MOD_CAST_SPEED, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_CSPD, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_CSPD_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyBlockCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float amount;
+    if (!ExtractFloat(&args, amount))
+        return false;
+
+    if (amount < 0 || amount > 100)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetStatFloatValue(PLAYER_BLOCK_PERCENTAGE, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_BLOCK, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_BLOCK_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyDodgeCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float amount;
+    if (!ExtractFloat(&args, amount))
+        return false;
+
+    if (amount < 0 || amount > 100)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetStatFloatValue(PLAYER_DODGE_PERCENTAGE, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_DODGE, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_DODGE_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
+bool ChatHandler::HandleModifyParryCommand(char *args)
+{
+    if (!*args)
+        return false;
+
+    Player *player = getSelectedPlayer();
+
+    if (!player)
+    {
+        PSendSysMessage(LANG_PLAYER_NOT_FOUND);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    float amount;
+    if (!ExtractFloat(&args, amount))
+        return false;
+
+    if (amount < 0 || amount > 100)
+    {
+        SendSysMessage(LANG_BAD_VALUE);
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    player->SetStatFloatValue(PLAYER_PARRY_PERCENTAGE, amount);
+
+    PSendSysMessage(LANG_YOU_CHANGE_PARRY, player->GetName(), amount);
+
+    if (needReportToTarget(player))
+        ChatHandler(player).PSendSysMessage(LANG_YOURS_PARRY_CHANGED, GetNameLink().c_str(), amount);
+
+    return true;
+}
+
 bool ChatHandler::HandleDebugMoveCommand(char* args)
 {
     Unit* target = getSelectedUnit();
@@ -6453,18 +7913,22 @@ bool ChatHandler::HandleDebugMoveCommand(char* args)
     switch (movetype)
     {
         case 0:
+            target->GetMotionMaster()->Clear(true, true);
             target->GetMotionMaster()->MoveIdle();
             break;
         case 1:
-            target->GetMotionMaster()->MoveRandom();
+            target->GetMotionMaster()->MoveIdle();
             break;
         case 2:
-            target->GetMotionMaster()->MoveConfused();
+            target->GetMotionMaster()->MoveRandom();
             break;
         case 3:
-            target->GetMotionMaster()->MoveFleeing(m_session->GetPlayer());
+            target->GetMotionMaster()->MoveConfused();
             break;
         case 4:
+            target->GetMotionMaster()->MoveFleeing(m_session->GetPlayer());
+            break;
+        case 5:
             target->GetMotionMaster()->MoveFeared(m_session->GetPlayer());
             break;
     }
@@ -6679,7 +8143,7 @@ bool ChatHandler::HandleDebugShowNearestGOInfo(char* args)
             float PlayerPosZ = 0.0f;
             pl->GetPosition(PlayerPosX, PlayerPosY, PlayerPosZ);
 
-            
+
         }
         else
         {

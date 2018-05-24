@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -336,7 +338,7 @@ void WorldSession::HandleTrainerBuySpellOpcode(WorldPacket & recv_data)
     SpellCastTargets targets;
     targets.setUnitTarget(_player);
 
-    spell->prepare(&targets);
+    spell->prepare(std::move(targets));
     spell->update(1); // Update the spell right now. Prevents desynch => take twice the money if you click really fast
 }
 
@@ -399,6 +401,13 @@ void WorldSession::HandleGossipSelectOptionOpcode(WorldPacket & recv_data)
             DEBUG_LOG("WORLD: HandleGossipSelectOptionOpcode - %s not found or you can't interact with it.", guid.GetString().c_str());
             return;
         }
+
+        // Clear possible StopMoving motion
+        if (pCreature->IsStopped())        
+            pCreature->GetMotionMaster()->Clear();
+            
+        pCreature->StopMoving();
+        
 
         if (!sScriptMgr.OnGossipSelect(_player, pCreature, sender, action, code.empty() ? NULL : code.c_str()))
             _player->OnGossipSelect(pCreature, gossipListId);

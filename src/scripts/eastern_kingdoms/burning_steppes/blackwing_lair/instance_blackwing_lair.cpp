@@ -131,7 +131,10 @@ enum
     MOB_LIEUR_SORT_AILE_NOIRE   = 12457,
     MOB_GARDE_WYRM_GRIFFEMORT   = 12460,
 
-    EMOTE_DESTROY_EGG           = -1469034
+    EMOTE_DESTROY_EGG           = -1469034,
+
+    CONDITION_SCEPTER_FAIL      = 1,
+    CONDITION_SCEPTER_WIN       = 2
 };
 
 struct blackwing_technicians_helper
@@ -184,24 +187,35 @@ public:
                 victimGuid = itr->first;
             }
         }
-        return (victimGuid);
+        return victimGuid;
     }
+    void RemovePotentialVictim(ObjectGuid victimGuid)
+    {
+        // Victim died, must be removed from threat list or we can get stuck on it.
+        // Better to remove it here than in RecalculateThreat since we'd have to keep
+        // track and update during iteration otherwise
+        std::map<ObjectGuid, float>::iterator itr = m_mThreatGuid.find(victimGuid);
+        if (itr != m_mThreatGuid.end())
+            m_mThreatGuid.erase(itr);
+    }
+
     ScriptedInstance *GetInstance() const
     {
         return (m_pInstance);
     }
-    void RecalculateThreath()
+    void RecalculateThreat()
     {
+        // Update when m_uiTechniciansUpdate == 0 (buffered update)
         if (m_uiTechniciansUpdate)
-        {            
-            if (--m_uiTechniciansUpdate == 0)
-                m_bUpdated = false;
-            return;
-        }
+            --m_uiTechniciansUpdate;
+        else
+            m_bUpdated = false;
 
         if (!m_bUpdated)
         {
-            m_uiTechniciansUpdate = m_vTechniciansGuid.size() - 1;
+            // Don't -1 for 0 index, otherwise we get stuck and never update again. Also the potential
+            // for an integer overflow
+            m_uiTechniciansUpdate = m_vTechniciansGuid.size();
             m_bUpdated = true;
             for (std::vector<ObjectGuid>::iterator itr = m_vTechniciansGuid.begin(); itr != m_vTechniciansGuid.end(); ++itr)
             {
@@ -569,6 +583,8 @@ struct instance_blackwing_lair : public ScriptedInstance
                         pCreature->DeleteLater();
                         break;
                     }
+                    if (m_auiEncounter[TYPE_RAZORGORE] != DONE)
+                        pCreature->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE);
                     m_lVaelGobs.push_back(pCreature->GetObjectGuid());
                  }
             case MOB_DEMONISTE_AILE_NOIRE:
@@ -583,6 +599,11 @@ struct instance_blackwing_lair : public ScriptedInstance
         }
     }
 
+    void OnPlayerDeath(Player *player) override
+    {
+        m_hBlackwingTechnicians.RemovePotentialVictim(player->GetObjectGuid());
+    }
+
     uint64 GetData64(uint32 data)
     {
         if (data < MAX_DATAS)
@@ -594,6 +615,10 @@ struct instance_blackwing_lair : public ScriptedInstance
     {
         switch (uiType)
         {
+        case DATA_SCEPTER_RUN_TIME:
+            m_auiData[DATA_SCEPTER_RUN_TIME] = uiData;
+            break;
+
         case TYPE_RAZORGORE:
             m_auiEncounter[TYPE_RAZORGORE] = uiData;
             if (uiData == IN_PROGRESS)
@@ -626,6 +651,13 @@ struct instance_blackwing_lair : public ScriptedInstance
                 {
                     if (pGo->GetGoState() != GO_STATE_ACTIVE) // Close
                         DoUseDoorOrButton(m_auiData[DATA_DOOR_RAZORGORE_ENTER]);
+                }
+                for (std::list<ObjectGuid>::iterator itr = m_lVaelGobs.begin(); itr != m_lVaelGobs.end(); ++itr)
+                {
+                    if (Creature *pCreature = instance->GetCreature(*itr))
+                    {
+                        pCreature->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE);
+                    }
                 }
             }
             break;
@@ -743,20 +775,59 @@ struct instance_blackwing_lair : public ScriptedInstance
                 m_auiData[DATA_EGG] = FAIL;
             }
             break;
+
+        case TYPE_SCEPTER_RUN:
+            m_auiEncounter[TYPE_SCEPTER_RUN] = uiData;
+            break;
+
+        case DATA_SCEPTER_CHAMPION:
+            m_auiData[DATA_SCEPTER_CHAMPION] = uiData;
+            break;
         }
 
-        if (uiData == DONE)
+
+
+
+        if (uiData == DONE || TYPE_SCEPTER_RUN == uiType || DATA_SCEPTER_CHAMPION == uiData)
         {
             OUT_SAVE_INST_DATA;
 
             std::ostringstream saveStream;
-            saveStream << m_auiEncounter[0] << " " << m_auiEncounter[1] << " " << m_auiEncounter[2] << " " << m_auiEncounter[3] << " " << m_auiEncounter[4] << " " << m_auiEncounter[5] << " " << m_auiEncounter[6] << " " << m_auiEncounter[7] << " " << m_auiEncounter[8] << " " << m_auiData[DATA_CHROM_BREATH] << " " << m_auiData[DATA_NEF_COLOR];
+            saveStream << m_auiEncounter[0] << " " << m_auiEncounter[1] << " " << m_auiEncounter[2] << " " << m_auiEncounter[3] << " " << m_auiEncounter[4] << 
+            " " << m_auiEncounter[5] << " " << m_auiEncounter[6] << " " << m_auiEncounter[7] << " " << m_auiEncounter[8] << " " << m_auiData[DATA_CHROM_BREATH] << 
+            " " << m_auiData[DATA_NEF_COLOR] << " " << m_auiEncounter[9] << " " << m_auiData[DATA_SCEPTER_RUN_TIME] << " " << m_auiData[DATA_SCEPTER_CHAMPION];
 
             strInstData = saveStream.str();
 
             SaveToDB();
             OUT_SAVE_INST_DATA_COMPLETE;
         }
+    }
+
+    bool CheckConditionCriteriaMeet(Player const* player, uint32 map_id, WorldObject const* source, uint32 instance_condition_id) const
+    {
+        ObjectGuid scepterChampion = m_auiData[DATA_SCEPTER_CHAMPION];
+
+        // No scepter run attempted
+        if (0 == scepterChampion)
+            return false;
+
+        // On scepter "alternate success", give everyone a copy of "From the Desk of Lord Victor Nefarius"
+        if (CONDITION_SCEPTER_FAIL == instance_condition_id)
+        {
+            if (FAIL == m_auiEncounter[TYPE_SCEPTER_RUN])
+                return true;
+        }
+
+        // A true champion. Reward only this one with the Red Scepter Shard
+        if (CONDITION_SCEPTER_WIN == instance_condition_id)
+        { 
+            if (DONE == m_auiEncounter[TYPE_SCEPTER_RUN] && player->GetGUID() == scepterChampion)
+                return true;
+        }
+
+        return false;
+
     }
 
     const char* Save()
@@ -783,11 +854,15 @@ struct instance_blackwing_lair : public ScriptedInstance
 
         std::istringstream loadStream(chrIn);
 
-        loadStream >> m_auiEncounter[0] >> m_auiEncounter[1] >> m_auiEncounter[2] >> m_auiEncounter[3] >> m_auiEncounter[4] >> m_auiEncounter[5] >> m_auiEncounter[6] >> m_auiEncounter[7] >> m_auiEncounter[8] >> m_auiData[DATA_CHROM_BREATH] >> m_auiData[DATA_NEF_COLOR];
+        loadStream >> m_auiEncounter[0] >> m_auiEncounter[1] >> m_auiEncounter[2] >> m_auiEncounter[3] >> 
+        m_auiEncounter[4] >> m_auiEncounter[5] >> m_auiEncounter[6] >> m_auiEncounter[7] >> m_auiEncounter[8] >> 
+        m_auiData[DATA_CHROM_BREATH] >> m_auiData[DATA_NEF_COLOR] >> m_auiEncounter[9] >> m_auiData[DATA_SCEPTER_RUN_TIME]
+        >> m_auiData[DATA_SCEPTER_CHAMPION];
 
         for (uint8 i = 0; i < MAX_ENCOUNTER; ++i)
-            if (m_auiEncounter[i] == IN_PROGRESS)           // Do not load an encounter as "In Progress" - reset it instead.
-                m_auiEncounter[i] = NOT_STARTED;
+            if (TYPE_SCEPTER_RUN != i)
+                if (m_auiEncounter[i] == IN_PROGRESS)           // Do not load an encounter as "In Progress" - reset it instead.
+                    m_auiEncounter[i] = NOT_STARTED;
 
         OUT_LOAD_INST_DATA_COMPLETE;
     }
@@ -1230,14 +1305,17 @@ struct npc_blackwing_technicianAI : public ScriptedAI
             else m_uiEmoteTimer -= uiDiff;
         }
 
-        if (/*!m_creature->SelectHostileTarget() || */!m_creature->getVictim())
+        // If we don't have a current victim and we're not added to the helper, stop AI.
+        // Have to check the helper if possible in case the victim has died, otherwise
+        // the technician will stand still doing nothing rather than re-targeting
+        if (!m_creature->getVictim() && !m_bAdded)
             return;
 
         if (m_pTechnicianHelper)
         {
             if (m_uiAggroSyncTimer <= uiDiff)
             {
-                m_pTechnicianHelper->RecalculateThreath();
+                m_pTechnicianHelper->RecalculateThreat();
                 m_uiAggroSyncTimer = 2500;
             }
             else
@@ -1248,6 +1326,9 @@ struct npc_blackwing_technicianAI : public ScriptedAI
         if (m_pTechnicianHelper)
             if (ObjectGuid victimGuid = m_pTechnicianHelper->GetVictimGuid())
                 victim = m_pTechnicianHelper->GetInstance()->instance->GetUnit(victimGuid);
+        
+        if (!victim)
+            return;
 
         if (victim)
         {

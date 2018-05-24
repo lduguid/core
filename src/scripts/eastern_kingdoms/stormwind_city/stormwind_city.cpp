@@ -22,7 +22,6 @@ SDCategory: Stormwind City
 EndScriptData */
 
 /* ContentData
-npc_archmage_malin
 npc_bartleby
 npc_dashel_stonefist
 npc_lady_katrana_prestor
@@ -30,36 +29,6 @@ EndContentData */
 
 #include "scriptPCH.h"
 #include <list>
-
-/*######
-## npc_archmage_malin
-######*/
-
-#define GOSSIP_ITEM_MALIN "Can you send me to Theramore? I have an urgent message for Lady Jaina from Highlord Bolvar."
-
-bool GossipHello_npc_archmage_malin(Player* pPlayer, Creature* pCreature)
-{
-    if (pCreature->isQuestGiver())
-        pPlayer->PrepareQuestMenu(pCreature->GetGUID());
-
-    if (pPlayer->GetQuestStatus(11223) == QUEST_STATUS_COMPLETE && !pPlayer->GetQuestRewardStatus(11223))
-        pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, GOSSIP_ITEM_MALIN, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
-
-    pPlayer->SEND_GOSSIP_MENU(pPlayer->GetGossipTextId(pCreature), pCreature->GetGUID());
-
-    return true;
-}
-
-bool GossipSelect_npc_archmage_malin(Player* pPlayer, Creature* pCreature, uint32 uiSender, uint32 uiAction)
-{
-    if (uiAction == GOSSIP_ACTION_INFO_DEF)
-    {
-        pPlayer->CLOSE_GOSSIP_MENU();
-        pCreature->CastSpell(pPlayer, 42711, true);
-    }
-
-    return true;
-}
 
 /*######
 ## npc_bartleby
@@ -89,10 +58,7 @@ struct npc_bartlebyAI : public ScriptedAI
 
     void AttackedBy(Unit* pAttacker)
     {
-        if (m_creature->getVictim())
-            return;
-
-        if (m_creature->IsFriendlyTo(pAttacker))
+        if (!pAttacker || m_creature->getVictim() || m_creature->IsFriendlyTo(pAttacker))
             return;
 
         AttackStart(pAttacker);
@@ -100,6 +66,9 @@ struct npc_bartlebyAI : public ScriptedAI
 
     void DamageTaken(Unit* pDoneBy, uint32 &uiDamage)
     {
+        if (!pDoneBy)
+            return;
+
         if (uiDamage > m_creature->GetHealth() || ((m_creature->GetHealth() - uiDamage) * 100 / m_creature->GetMaxHealth() < 15))
         {
             uiDamage = 0;
@@ -114,6 +83,9 @@ struct npc_bartlebyAI : public ScriptedAI
 
 bool QuestAccept_npc_bartleby(Player* pPlayer, Creature* pCreature, const Quest* pQuest)
 {
+    if (!pPlayer || !pCreature || !pQuest)
+        return false;
+
     if (pQuest->GetQuestId() == QUEST_BEAT)
     {
         pCreature->setFaction(FACTION_ENEMY);
@@ -131,59 +103,360 @@ CreatureAI* GetAI_npc_bartleby(Creature* pCreature)
 ## npc_dashel_stonefist
 ######*/
 
+//-----------------------------------------------------------------------------
+// Full quest event implementation (Missing Diplomat part 8 id:1447).
+// Author: Kampeador
+//-----------------------------------------------------------------------------
 enum
 {
-    QUEST_MISSING_DIPLO_PT8     = 1447,
-    FACTION_HOSTILE             = 168
+    // ids from "script_texts" table
+    SAY_PROGRESS_1_DAS = -1999902, // Now you're gonna get it good, "PlayerName".
+    SAY_PROGRESS_2_DAS = -1999903, // Okay, okay! Enough fighting. No one else needs to get hurt.
+    SAY_PROGRESS_3_DAS = -1999904, // It's okay, boys. Back off. You've done enough. I'll meet up with you later.
+    SAY_PROGRESS_4_THU = -1999905, // All right, boss. You sure though? Just seems like a waste of good practice.
+    SAY_PROGRESS_5_THU = -1999915, // Yeah, okay, boss. No problem.
+    // quest id
+    QUEST_MISSING_DIPLO_PT8 = 1447,
+    // NPCs that helps Dashel
+    NPC_OLD_TOWN_THUG = 4969,
+    // factions
+    FACTION_NEUTRAL = 189,
+    FACTION_FRIENDLY = 84, // original faction taken from DB
+    FACTION_FRIENDLY_TO_ALL = 35,
+    // quest phases
+    MDQP_NONE = 0, // Dashel returns his spawn point
+
+    // Occur only if thugs are alive
+    MDQP_SAY1 = 1,
+    MDQP_SAY2 = 2,
+    MDQP_SAY3 = 4,
+    MDQP_THUG_WALK_AWAY_1 = 5,
+    MDQP_THUG_WALK_AWAY_2 = 6,
+
+    MDQP_QUEST_COMPLETE = 7 // Triggers quest complete
 };
 
 struct npc_dashel_stonefistAI : public ScriptedAI
 {
+    // old town thugs
+    Creature* m_thugs[2];
+    // current event phase
+    uint32 m_eventPhase;
+    // check if an event has been started.
+    bool m_dialogStarted;
+    // player guid to trigger: quest completed
+    ObjectGuid m_playerGuid;
+    // timer to switch between phases
+    uint32 m_nextPhaseDelayTimer;
+    // used to check if 1 or more thugs are alive
+    bool m_thugsAlive;
+    // used to check if its a quest fight or not.
+    bool m_questFightStarted;
+
+    // if quest fight is active, then dialog event will be triggered
+    inline void startQuestFight() { m_questFightStarted = true; }
+
     npc_dashel_stonefistAI(Creature* pCreature) : ScriptedAI(pCreature)
     {
-        m_uiNormalFaction = pCreature->getFaction();
+        m_questFightStarted = false;
         Reset();
     }
 
-    uint32 m_uiNormalFaction;
-
-    void Reset()
-    {
-        if (m_creature->getFaction() != m_uiNormalFaction)
-            m_creature->setFaction(m_uiNormalFaction);
-    }
-
+    // Prevent Reset() call after Dashel has been defeated.
     void AttackedBy(Unit* pAttacker)
     {
-        if (m_creature->getVictim())
-            return;
-
-        if (m_creature->IsFriendlyTo(pAttacker))
+        if (!pAttacker || m_creature->getVictim() || m_creature->IsFriendlyTo(pAttacker))
             return;
 
         AttackStart(pAttacker);
     }
 
+    void Reset()
+    {
+        if (m_questFightStarted)
+        {
+            // Reset() during quest fight -> quest failed.
+            Player* player = m_creature->GetMap()->GetPlayer(m_playerGuid);
+            if (player)
+                player->GroupEventFailHappens(QUEST_MISSING_DIPLO_PT8);
+
+            // remove thugs
+            for (ptrdiff_t i = 0; i < 2; ++i)
+            {
+                if (m_thugs[i])
+                {
+                    if (m_thugs[i]->isAlive())
+                        static_cast<TemporarySummon*>(m_thugs[i])->UnSummon();
+                }
+            }
+        }
+
+        // zero init required to prevent crash
+        for (ptrdiff_t i = 0; i < 2; ++i)
+            m_thugs[i] = nullptr;
+
+        m_questFightStarted = false;
+        m_eventPhase = MDQP_NONE;
+        m_dialogStarted = false;
+        m_nextPhaseDelayTimer = 3000; // MDQP_SAY1 phase delay
+        m_thugsAlive = false;
+        // restore some flags
+        m_creature->SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_QUESTGIVER);
+        // restore faction
+        m_creature->setFaction(FACTION_FRIENDLY);
+        // reset player guid
+        m_playerGuid.Clear();
+    }
+
     void DamageTaken(Unit* pDoneBy, uint32 &uiDamage)
     {
-        if (uiDamage > m_creature->GetHealth() || ((m_creature->GetHealth() - uiDamage) * 100 / m_creature->GetMaxHealth() < 15))
+        if (m_questFightStarted)
         {
-            uiDamage = 0;
+            if (uiDamage > m_creature->GetHealth() || m_creature->GetHealthPercent() < 20.0f)
+            {
+                uiDamage = 0;
 
-            if (pDoneBy->GetTypeId() == TYPEID_PLAYER)
-                ((Player*)pDoneBy)->AreaExploredOrEventHappens(QUEST_MISSING_DIPLO_PT8);
+                // Dashel says: Okay, okay! Enough fighting. No one else needs to get hurt.
+                DoScriptText(SAY_PROGRESS_2_DAS, m_creature);
 
-            EnterEvadeMode();
+                // remove all dots, etc
+                m_creature->RemoveAllAuras();
+                // set friendly to all faction to avoid an undefined behavior
+                m_creature->setFaction(FACTION_FRIENDLY_TO_ALL);
+                // clean thread list
+                m_creature->DeleteThreatList();
+                // stop combat
+                m_creature->CombatStop();
+
+                // NPC moves to his spawn point
+                MotionMaster* pMotionMaster = m_creature->GetMotionMaster();
+                if (pMotionMaster)
+                    pMotionMaster->MoveTargetedHome();
+
+                // check if thugs are alive
+                for (ptrdiff_t i = 0; i < 2; ++i)
+                {
+                    if (m_thugs[i])
+                    {
+                        if (m_thugs[i]->isAlive())
+                        {
+                            // remove all dots, etc
+                            m_thugs[i]->RemoveAllAuras();
+                            // clean thread list
+                            m_thugs[i]->DeleteThreatList();
+                            // stop combat
+                            m_thugs[i]->CombatStop();
+                            // set friendly to all faction to avoid an undefined behavior
+                            m_thugs[i]->setFaction(FACTION_FRIENDLY_TO_ALL);
+                            // move to spawn location
+                            MotionMaster* pMotionMaster = m_thugs[i]->GetMotionMaster();
+                            if (pMotionMaster)
+                                pMotionMaster->MoveTargetedHome();
+
+                            m_thugsAlive = true;
+                        }
+                    }
+                }
+
+                m_questFightStarted = false;
+                m_dialogStarted = true;
+                m_eventPhase = MDQP_NONE;
+            }
+        }
+    }
+
+    void UpdateAI(const uint32 uiDiff)
+    {
+        switch (m_eventPhase)
+        {
+        default: // MDQP_NONE
+            ScriptedAI::UpdateAI(uiDiff);
+            break;
+        case MDQP_SAY1: // Occurs only if thugs are alive
+            {
+                if (m_nextPhaseDelayTimer < uiDiff)
+                {
+                    // Dashel says: It's okay, boys. Back off. You've done enough.I'll meet up with you later.
+                    DoScriptText(SAY_PROGRESS_3_DAS, m_creature);
+                    // switch phase
+                    m_nextPhaseDelayTimer = 3000;
+                    m_eventPhase = MDQP_SAY2;
+                }
+                else
+                    m_nextPhaseDelayTimer -= uiDiff;
+            } break;
+        case MDQP_SAY2: // Occurs only if thugs are alive
+            {
+                if (m_nextPhaseDelayTimer < uiDiff)
+                {
+                    // recheck for safety, thugs can be killed by gm command, etc.
+                    if (m_thugs[0])
+                    {
+                        if (m_thugs[0]->isAlive())
+                            DoScriptText(SAY_PROGRESS_4_THU, m_thugs[0]);
+                    }
+
+                    // switch phase
+                    m_nextPhaseDelayTimer = 1500;
+                    m_eventPhase = MDQP_SAY3;
+                }
+                else
+                    m_nextPhaseDelayTimer -= uiDiff;
+            } break;
+        case MDQP_SAY3: // Occurs only if thugs are alive
+            {
+                if (m_nextPhaseDelayTimer < uiDiff)
+                {
+                    // recheck for safety, thugs can be killed by gm command, etc.
+                    if (m_thugs[1])
+                    {
+                        if (m_thugs[1]->isAlive())
+                            DoScriptText(SAY_PROGRESS_5_THU, m_thugs[1]);
+                    }
+
+                    // switch phase
+                    m_nextPhaseDelayTimer = 1000;
+                    m_eventPhase = MDQP_THUG_WALK_AWAY_1;
+                }
+                else
+                    m_nextPhaseDelayTimer -= uiDiff;
+            } break;
+        case MDQP_THUG_WALK_AWAY_1: // Occurs only if thugs are alive
+            {
+                if (m_nextPhaseDelayTimer < uiDiff)
+                {
+                    // First thug goes away
+                    if (m_thugs[0])
+                    {
+                        if (m_thugs[0]->isAlive())
+                        {
+                            m_thugs[0]->GetMotionMaster()->MovePoint(0, -8669.338867f, 448.362976f, 99.740005f, MOVE_WALK_MODE);
+                            m_thugs[0]->ForcedDespawn(3000);
+                        }
+                    }
+
+                    m_nextPhaseDelayTimer = 1500;
+                    m_eventPhase = MDQP_THUG_WALK_AWAY_2;
+                }
+                else
+                    m_nextPhaseDelayTimer -= uiDiff;
+            } break;
+        case MDQP_THUG_WALK_AWAY_2: // Occurs only if thugs are alive
+            {
+                if (m_nextPhaseDelayTimer < uiDiff)
+                {
+                    // Second thug goes away
+                    if (m_thugs[1])
+                    {
+                        if (m_thugs[1]->isAlive())
+                        {
+                            m_thugs[1]->GetMotionMaster()->MovePoint(0, -8686.397461f, 447.595703f, 99.994408f, MOVE_WALK_MODE);
+                            m_thugs[1]->ForcedDespawn(2000);
+                        }
+                    }
+
+                    m_nextPhaseDelayTimer = 1000;
+                    m_eventPhase = MDQP_QUEST_COMPLETE;
+                }
+                else
+                    m_nextPhaseDelayTimer -= uiDiff;
+            } break;
+        case MDQP_QUEST_COMPLETE:
+            {
+                if (m_nextPhaseDelayTimer < uiDiff)
+                {
+                    // Set quest completed
+                    Player* player = m_creature->GetMap()->GetPlayer(m_playerGuid);
+                    if (player)
+                        player->GroupEventHappens(QUEST_MISSING_DIPLO_PT8, m_creature);
+
+                    Reset();
+                }
+                else
+                    m_nextPhaseDelayTimer -= uiDiff;
+            } break;
+        }
+    }
+
+    // Dashel returns to his spawn point
+    void JustReachedHome() override
+    {
+        // switch to correct dialog phase, depends if thugs are alive.
+        if (m_dialogStarted)
+        {
+            if (m_thugsAlive)
+                m_eventPhase = MDQP_SAY1;
+            else
+                m_eventPhase = MDQP_QUEST_COMPLETE;
+        }
+    }
+
+    void JustDied(Unit* pUnit)
+    {
+        // case: something weird happened, killed by GM command, etc.
+        if (m_dialogStarted || m_questFightStarted)
+        {
+            // remove thugs
+            for (ptrdiff_t i = 0; i < 2; ++i)
+            {
+                if (m_thugs[i])
+                {
+                    static_cast<TemporarySummon*>(m_thugs[i])->UnSummon();
+                    m_thugs[i] = nullptr;
+                }
+            }
         }
     }
 };
 
 bool QuestAccept_npc_dashel_stonefist(Player* pPlayer, Creature* pCreature, const Quest* pQuest)
 {
+    if (!pPlayer || !pCreature || !pQuest)
+        return false;
+
     if (pQuest->GetQuestId() == QUEST_MISSING_DIPLO_PT8)
     {
-        pCreature->setFaction(FACTION_HOSTILE);
-        ((npc_dashel_stonefistAI*)pCreature->AI())->AttackStart(pPlayer);
+        npc_dashel_stonefistAI* dashelStonefistAI = dynamic_cast<npc_dashel_stonefistAI*>(pCreature->AI());
+        if (dashelStonefistAI)
+        {
+            // On official in some cases: he didn't say this phrase. I am not sure if it was a bug or a random feature.
+            // Dashel says: Now you're gonna get it good, "PlayerName".
+            DoScriptText(SAY_PROGRESS_1_DAS, pCreature, pPlayer);
+
+            // set dashel stonefist's faction to neutral
+            pCreature->setFaction(FACTION_NEUTRAL);
+            // prevents random player pick up a quest during event
+            pCreature->RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_QUESTGIVER);
+
+            // save player guid for later use(to trigger a quest completed)
+            dashelStonefistAI->m_playerGuid = pPlayer->GetObjectGuid();
+
+            // spawn thugs and make them focus player.
+            // thug 1
+            dashelStonefistAI->m_thugs[0] = pCreature->SummonCreature(NPC_OLD_TOWN_THUG, -8676.075195f, 443.744019f, 99.632210f, 3.981758f, TEMPSUMMON_DEAD_DESPAWN);
+
+            if (!dashelStonefistAI->m_thugs[0])
+                return false;
+
+            // make thug focus player
+            dashelStonefistAI->m_thugs[0]->AI()->AttackStart(pPlayer);
+            // Initial flag is passive, which prevents from chasing or putting wrong targets into a combat mode on summon.
+            dashelStonefistAI->m_thugs[0]->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PASSIVE);
+
+            // thug 2
+            dashelStonefistAI->m_thugs[1] = pCreature->SummonCreature(NPC_OLD_TOWN_THUG, -8685.416992f, 443.130829f, 99.526917f, 5.759635f, TEMPSUMMON_DEAD_DESPAWN);
+            // make thugs focus player
+            dashelStonefistAI->m_thugs[1]->AI()->AttackStart(pPlayer);
+            // Initial flag is passive, which prevents from chasing or putting wrong targets into a combat mode on summon.
+            dashelStonefistAI->m_thugs[1]->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PASSIVE);
+
+            // start quest fight.
+            dashelStonefistAI->startQuestFight();
+            // make Dashel focus player.
+            dashelStonefistAI->AttackStart(pPlayer);
+        }
+        else
+            return false;
     }
     return true;
 }
@@ -1080,8 +1353,8 @@ enum
 {
     QUEST_CELEBRATING_GOOD_TIMES        = 7496,
 
-    YELL_ONY_ALLY_REWARD_1              = -143941,
-    YELL_ONY_ALLY_REWARD_2              = -143942,
+    YELL_ONY_ALLY_REWARD_1              = -1900111,
+    YELL_ONY_ALLY_REWARD_2              = -1900110,
 
     GO_ONYXIAS_HEAD_ALLY                = 179558,
 
@@ -1187,14 +1460,12 @@ bool QuestRewarded_npc_major_mattingly(Player* pPlayer, Creature* pCreature, Que
 
 enum
 {
-    QUEST_LORD_OF_BLACKROCK_ALLY          = 7782,
+    QUEST_LORD_OF_BLACKROCK_ALLY    = 7782,
 
-    YELL_NEF_REWARD_1_MALE_ALLY          = -147211,
-    YELL_NEF_REWARD_2_MALE_ALLY          = -147212,
-    YELL_NEF_REWARD_1_FEMALE_ALLY        = -147213,
-    YELL_NEF_REWARD_2_FEMALE_ALLY        = -147214,
+    YELL_NEF_REWARD_1_ALLY          = -1900104,
+    YELL_NEF_REWARD_2_ALLY          = -1900103,
 
-    GO_NEFARIANS_HEAD_ALLY               = 179882,
+    GO_NEFARIANS_HEAD_ALLY          = 179882,
 };
 
 struct npc_field_marshal_afrasiabiAI : public ScriptedAI
@@ -1238,7 +1509,7 @@ struct npc_field_marshal_afrasiabiAI : public ScriptedAI
                         if (Player* pPlayer = m_creature->GetMap()->GetPlayer(m_playerGuid))
                         {
                             m_creature->HandleEmote(EMOTE_ONESHOT_SHOUT);
-                            m_creature->MonsterYellToZone(pPlayer->getGender() ? YELL_NEF_REWARD_1_FEMALE_ALLY : YELL_NEF_REWARD_1_MALE_ALLY, 0, pPlayer);
+                            m_creature->MonsterYellToZone(YELL_NEF_REWARD_1_ALLY, 0, pPlayer);
                         }
                         m_uiDialogueTimer = 10000;
                         break;
@@ -1246,7 +1517,7 @@ struct npc_field_marshal_afrasiabiAI : public ScriptedAI
                         if (Player* pPlayer = m_creature->GetMap()->GetPlayer(m_playerGuid))
                         {
                             m_creature->HandleEmote(EMOTE_ONESHOT_SHOUT);
-                            m_creature->MonsterYellToZone(pPlayer->getGender() ? YELL_NEF_REWARD_2_FEMALE_ALLY : YELL_NEF_REWARD_2_MALE_ALLY);
+                            m_creature->MonsterYellToZone(YELL_NEF_REWARD_2_ALLY, 0, pPlayer);
                         }
                         if (GameObject* pGo = m_creature->FindNearestGameObject(GO_NEFARIANS_HEAD_ALLY, 150.0f))
                         {
@@ -1295,15 +1566,83 @@ bool QuestRewarded_npc_field_marshal_afrasiabi(Player* pPlayer, Creature* pCreat
     return true;
 }
 
+/*######
+## npc_master_wood
+######*/
+
+enum
+{
+    SAY_RUDE_1 = -1780227,
+    SAY_RUDE_2 = -1780228,
+    SAY_RUDE_3 = -1780229
+};
+
+struct npc_master_woodAI : public ScriptedAI
+{
+    npc_master_woodAI(Creature* pCreature) : ScriptedAI(pCreature)
+    {
+        Reset();
+    }
+
+    uint32 m_uiRudeCount;
+
+    void Reset()
+    {
+        m_uiRudeCount = 0;
+    }
+
+    void ReceiveEmote(Player* pPlayer, uint32 emote)
+    {
+        if (pPlayer && (pPlayer->GetTeam() == ALLIANCE) && !m_creature->isInCombat() && m_creature->IsWithinLOSInMap(pPlayer))
+        {
+            switch (emote)
+            {
+                case TEXTEMOTE_RUDE:
+                {
+                    m_uiRudeCount++;
+                    switch (m_uiRudeCount)
+                    {
+                        case 1:
+                            DoScriptText(SAY_RUDE_1, m_creature, pPlayer);
+                            break;
+                        case 2:
+                            DoScriptText(SAY_RUDE_2, m_creature, pPlayer);
+                            break;
+                        case 3:
+                            DoScriptText(SAY_RUDE_3, m_creature, pPlayer);
+                            break;
+                        case 5:
+                            m_creature->GetMotionMaster()->MoveCharge(pPlayer, 1000, true);
+                            m_uiRudeCount = 0;
+                            break;
+                    }
+                    break;
+                }
+                case TEXTEMOTE_WAVE:
+                    m_creature->HandleEmoteCommand(EMOTE_ONESHOT_WAVE);
+                    break;
+                case TEXTEMOTE_BOW:
+                    m_creature->HandleEmoteCommand(EMOTE_ONESHOT_FLEX);
+                    break;
+                case TEXTEMOTE_SALUTE:
+                    m_creature->HandleEmoteCommand(EMOTE_ONESHOT_SALUTE);
+                    break;
+                case TEXTEMOTE_FLEX:
+                    m_creature->HandleEmoteCommand(EMOTE_ONESHOT_LAUGH);
+                    break;
+            }
+        }
+    }
+};
+
+CreatureAI* GetAI_npc_master_wood(Creature* pCreature)
+{
+    return new npc_master_woodAI(pCreature);
+}
+
 void AddSC_stormwind_city()
 {
     Script *newscript;
-
-    newscript = new Script;
-    newscript->Name = "npc_archmage_malin";
-    newscript->pGossipHello = &GossipHello_npc_archmage_malin;
-    newscript->pGossipSelect = &GossipSelect_npc_archmage_malin;
-    newscript->RegisterSelf();
 
     newscript = new Script;
     newscript->Name = "npc_bartleby";
@@ -1357,5 +1696,10 @@ void AddSC_stormwind_city()
     newscript->Name = "npc_field_marshal_afrasiabi";
     newscript->GetAI = &GetAI_npc_field_marshal_afrasiabi;
     newscript->pQuestRewardedNPC = &QuestRewarded_npc_field_marshal_afrasiabi;
+    newscript->RegisterSelf();
+
+    newscript = new Script;
+    newscript->Name = "npc_master_wood";
+    newscript->GetAI = &GetAI_npc_master_wood;
     newscript->RegisterSelf();
 }

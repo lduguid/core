@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -291,8 +293,16 @@ void Object::BuildCreateUpdateBlockForPlayer(UpdateData *data, Player *target) c
         // UPDATETYPE_CREATE_OBJECT2 for some gameobject types...
         if (isType(TYPEMASK_GAMEOBJECT))
         {
-            switch (((GameObject*)this)->GetGoType())
+            GameObject *go = (GameObject*)this;
+            switch (go->GetGoType())
             {
+                case GAMEOBJECT_TYPE_BUTTON:
+                {
+                    const LockEntry *lock = sLockStore.LookupEntry(go->GetGOInfo()->GetLockId());
+                    if (!lock || lock->Index[1] != LOCKTYPE_SLOW_OPEN ||
+                            (go->isSpawned() && !go->GetRespawnDelay()))
+                        break;
+                }
                 case GAMEOBJECT_TYPE_TRAP:
                 case GAMEOBJECT_TYPE_DUEL_ARBITER:
                 case GAMEOBJECT_TYPE_FLAGSTAND:
@@ -301,8 +311,6 @@ void Object::BuildCreateUpdateBlockForPlayer(UpdateData *data, Player *target) c
                     break;
                 case GAMEOBJECT_TYPE_TRANSPORT:
                     updateFlags |= UPDATEFLAG_TRANSPORT;
-                    break;
-                default:
                     break;
             }
         }
@@ -377,6 +385,15 @@ void Object::BuildValuesUpdateBlockForPlayer(UpdateData *data, Player *target) c
 void Object::BuildOutOfRangeUpdateBlock(UpdateData * data) const
 {
     data->AddOutOfRangeGUID(GetObjectGuid());
+}
+
+void Object::SendOutOfRangeUpdateToPlayer(Player* player)
+{
+    UpdateData data;
+    BuildOutOfRangeUpdateBlock(&data);
+    WorldPacket packet;
+    data.BuildPacket(&packet);
+    player->SendDirectMessage(&packet);
 }
 
 void Object::DestroyForPlayer(Player *target) const
@@ -542,6 +559,31 @@ void Object::BuildValuesUpdate(uint8 updatetype, ByteBuffer * data, UpdateMask *
                             if (target->getClass() != CLASS_HUNTER)
                                 appendValue &= ~UNIT_NPC_FLAG_STABLEMASTER;
                         }
+
+                        if (appendValue & UNIT_NPC_FLAG_FLIGHTMASTER)
+                        {
+                            QuestRelationsMapBounds bounds = sObjectMgr.GetCreatureQuestRelationsMapBounds(((Creature*)this)->GetEntry());
+                            for (QuestRelationsMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+                            {
+                                Quest const* pQuest = sObjectMgr.GetQuestTemplate(itr->second);
+                                if (target->CanSeeStartQuest(pQuest))
+                                {
+                                    appendValue &= ~UNIT_NPC_FLAG_FLIGHTMASTER;
+                                    break;
+                                }
+                            }
+
+                            bounds = sObjectMgr.GetCreatureQuestInvolvedRelationsMapBounds(((Creature*)this)->GetEntry());
+                            for (QuestRelationsMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+                            {
+                                Quest const* pQuest = sObjectMgr.GetQuestTemplate(itr->second);
+                                if (target->CanRewardQuest(pQuest, false))
+                                {
+                                    appendValue &= ~UNIT_NPC_FLAG_FLIGHTMASTER;
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     *data << uint32(appendValue);
@@ -569,7 +611,15 @@ void Object::BuildValuesUpdate(uint8 updatetype, ByteBuffer * data, UpdateMask *
                 else if (index == UNIT_DYNAMIC_FLAGS)
                 {
                     uint32 dynamicFlags = m_uint32Values[index];
-
+                    if (HasFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_TRACK_UNIT))
+                        if (Unit const * unit = ToUnit())
+                        {
+                            Unit::AuraList auras = unit->GetAurasByType(SPELL_AURA_MOD_STALKED);
+                            if (std::find_if(auras.begin(), auras.end(),[target](Aura *a){
+                                return target->GetObjectGuid() == a->GetCasterGuid();
+                            }) == auras.end())
+                                dynamicFlags &= ~UNIT_DYNFLAG_TRACK_UNIT;
+                        }
                     if (Creature const* creature = ToCreature())
                     {
                         if (creature->HasLootRecipient())
@@ -1063,7 +1113,7 @@ void Object::ExecuteDelayedActions()
 {
     if (_delayedActions & OBJECT_DELAYED_MARK_CLIENT_UPDATE)
     {
-        if (m_inWorld)
+        if (m_inWorld && !_deleted)
         {
             if (!m_objectUpdated)
             {
@@ -1081,8 +1131,21 @@ void Object::ExecuteDelayedActions()
     }
 }
 
+bool WorldObject::IsWithinLootXPDist(WorldObject const * objToLoot) const
+{
+    if (objToLoot && IsInMap(objToLoot) && objToLoot->GetMap()->IsRaid())
+        return true;
+
+    return objToLoot && IsInMap(objToLoot) && _IsWithinDist(objToLoot, sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE) + objToLoot->m_lootAndXPRangeModifier, false);
+}
+
+void WorldObject::SetLootAndXPModDist(float val)
+{
+    m_lootAndXPRangeModifier = val;
+}
+
 WorldObject::WorldObject()
-    : m_isActiveObject(false), m_currMap(nullptr), m_mapId(0), m_InstanceId(0)
+    : m_isActiveObject(false), m_currMap(nullptr), m_mapId(0), m_InstanceId(0), m_lootAndXPRangeModifier(0)
 {
     // Phasing
     worldMask = WORLD_DEFAULT_OBJECT;
@@ -1634,7 +1697,7 @@ public:
         va_copy(argsCpy, *i_vaList);
         vsnprintf(textFinal, 2048, text, argsCpy);
         va_end(argsCpy);
-        WorldObject::BuildMonsterChat(&data, i_object.GetObjectGuid(), i_msgtype, textFinal, i_language, i_object.GetNameForLocaleIdx(loc_idx), i_target ? i_target->GetObjectGuid() : ObjectGuid(), i_target ? i_target->GetNameForLocaleIdx(loc_idx) : "");
+        WorldObject::BuildMonsterChat(&data, i_object.GetObjectGuid(), i_msgtype, textFinal, i_language, i_object.GetNameForLocaleIdx(loc_idx), i_target ? i_target->GetObjectGuid() : ObjectGuid());
     }
 
 private:
@@ -1694,14 +1757,14 @@ void WorldObject::PMonsterYell(const char* text, ...)
 void WorldObject::MonsterSay(const char* text, uint32 language, Unit* target)
 {
     WorldPacket data(SMSG_MESSAGECHAT, 200);
-    BuildMonsterChat(&data, GetObjectGuid(), CHAT_MSG_MONSTER_SAY, text, language, GetName(), target ? target->GetObjectGuid() : ObjectGuid(), target ? target->GetName() : "");
+    BuildMonsterChat(&data, GetObjectGuid(), CHAT_MSG_MONSTER_SAY, text, language, GetName(), target ? target->GetObjectGuid() : ObjectGuid());
     SendMessageToSetInRange(&data, sWorld.getConfig(CONFIG_FLOAT_LISTEN_RANGE_SAY), true);
 }
 
 void WorldObject::MonsterYell(const char* text, uint32 language, Unit* target)
 {
     WorldPacket data(SMSG_MESSAGECHAT, 200);
-    BuildMonsterChat(&data, GetObjectGuid(), CHAT_MSG_MONSTER_YELL, text, language, GetName(), target ? target->GetObjectGuid() : ObjectGuid(), target ? target->GetName() : "");
+    BuildMonsterChat(&data, GetObjectGuid(), CHAT_MSG_MONSTER_YELL, text, language, GetName(), target ? target->GetObjectGuid() : ObjectGuid());
     SendMessageToSetInRange(&data, sWorld.getConfig(CONFIG_FLOAT_LISTEN_RANGE_YELL), true);
 }
 
@@ -1709,7 +1772,7 @@ void WorldObject::MonsterTextEmote(const char* text, Unit* target, bool IsBossEm
 {
     WorldPacket data(SMSG_MESSAGECHAT, 200);
     BuildMonsterChat(&data, GetObjectGuid(), IsBossEmote ? CHAT_MSG_RAID_BOSS_EMOTE : CHAT_MSG_MONSTER_EMOTE, text, LANG_UNIVERSAL,
-                     GetName(), target ? target->GetObjectGuid() : ObjectGuid(), target ? target->GetName() : "");
+                     GetName(), target ? target->GetObjectGuid() : ObjectGuid());
     SendMessageToSetInRange(&data, sWorld.getConfig(IsBossEmote ? CONFIG_FLOAT_LISTEN_RANGE_YELL : CONFIG_FLOAT_LISTEN_RANGE_TEXTEMOTE), true);
 }
 
@@ -1720,7 +1783,7 @@ void WorldObject::MonsterWhisper(const char* text, Unit* target, bool IsBossWhis
 
     WorldPacket data(SMSG_MESSAGECHAT, 200);
     BuildMonsterChat(&data, GetObjectGuid(), IsBossWhisper ? CHAT_MSG_RAID_BOSS_WHISPER : CHAT_MSG_MONSTER_WHISPER, text, LANG_UNIVERSAL,
-                     GetName(), target->GetObjectGuid(), target->GetName());
+                     GetName(), target->GetObjectGuid());
     ((Player*)target)->GetSession()->SendPacket(&data);
 }
 
@@ -1736,7 +1799,7 @@ namespace MaNGOS
             char const* text = sObjectMgr.GetMangosString(i_textId, loc_idx);
 
             WorldObject::BuildMonsterChat(&data, i_object.GetObjectGuid(), i_msgtype, text, i_language, i_object.GetNameForLocaleIdx(loc_idx), 
-                i_target ? i_target->GetObjectGuid() : ObjectGuid(), i_target ? i_target->GetNameForLocaleIdx(loc_idx) : "");
+                i_target ? i_target->GetObjectGuid() : ObjectGuid());
         }
 
     private:
@@ -1779,6 +1842,19 @@ void WorldObject::MonsterYellToZone(int32 textId, uint32 language, Unit* target)
             say_do(itr->getSource());
 }
 
+void WorldObject::MonsterScriptToZone(int32 textId, ChatMsg type, uint32 language, Unit* target) const
+{
+    MaNGOS::MonsterChatBuilder say_build(*this, type, textId, language, target);
+    MaNGOS::LocalizedPacketDo<MaNGOS::MonsterChatBuilder> say_do(say_build);
+
+    uint32 zoneid = GetZoneId();
+
+    auto const& pList = GetMap()->GetPlayers();
+    for (auto itr = pList.begin(); itr != pList.end(); ++itr)
+        if (itr->getSource()->GetZoneId() == zoneid)
+            say_do(itr->getSource());
+}
+
 void WorldObject::MonsterTextEmote(int32 textId, Unit* target, bool IsBossEmote) const
 {
     float range = sWorld.getConfig(IsBossEmote ? CONFIG_FLOAT_LISTEN_RANGE_YELL : CONFIG_FLOAT_LISTEN_RANGE_TEXTEMOTE);
@@ -1799,12 +1875,12 @@ void WorldObject::MonsterWhisper(int32 textId, Unit* target, bool IsBossWhisper)
 
     WorldPacket data(SMSG_MESSAGECHAT, 200);
     BuildMonsterChat(&data, GetObjectGuid(), IsBossWhisper ? CHAT_MSG_RAID_BOSS_WHISPER : CHAT_MSG_MONSTER_WHISPER, text, LANG_UNIVERSAL,
-                     GetNameForLocaleIdx(loc_idx), target->GetObjectGuid(), "");
+                     GetNameForLocaleIdx(loc_idx), target->GetObjectGuid());
 
     ((Player*)target)->GetSession()->SendPacket(&data);
 }
 
-void WorldObject::BuildMonsterChat(WorldPacket *data, ObjectGuid senderGuid, uint8 msgtype, char const* text, uint32 language, char const* name, ObjectGuid targetGuid, char const* targetName)
+void WorldObject::BuildMonsterChat(WorldPacket *data, ObjectGuid senderGuid, uint8 msgtype, char const* text, uint32 language, char const* name, ObjectGuid targetGuid)
 {
     *data << uint8(msgtype);
     *data << uint32(language);
@@ -1822,11 +1898,6 @@ void WorldObject::BuildMonsterChat(WorldPacket *data, ObjectGuid senderGuid, uin
     *data << uint32(strlen(name) + 1);
     *data << name;
     *data << ObjectGuid(targetGuid);                        // Unit Target
-    if (targetGuid && !targetGuid.IsPlayer())
-    {
-        *data << uint32(strlen(targetName) + 1);            // target name length
-        *data << targetName;                                // target name
-    }
     *data << (uint32)(strlen(text) + 1);
     *data << text;
     *data << (uint8)0;                                      // ChatTag
@@ -1950,6 +2021,15 @@ void WorldObject::SetMap(Map * map)
     //lets save current map's Id/instanceId
     m_mapId = map->GetId();
     m_InstanceId = map->GetInstanceId();
+
+    // Order is important, must be done after m_currMap is set
+    SetZoneScript();
+}
+
+void WorldObject::ResetMap()
+{
+    m_currMap = nullptr;
+    m_zoneScript = nullptr;
 }
 
 TerrainInfo const* WorldObject::GetTerrain() const
@@ -2065,6 +2145,7 @@ GameObject* WorldObject::SummonGameObject(uint32 entry, float x, float y, float 
 
 void WorldObject::SetZoneScript()
 {
+    m_zoneScript = nullptr;
     if (Map* pMap = FindMap())
     {
         if (pMap->IsDungeon())
@@ -2312,6 +2393,16 @@ void WorldObject::PlayDirectSound(uint32 sound_id, Player* target /*= NULL*/)
 {
     WorldPacket data(SMSG_PLAY_SOUND, 4);
     data << uint32(sound_id);
+    if (target)
+        target->SendDirectMessage(&data);
+    else
+        SendMessageToSet(&data, true);
+}
+
+void WorldObject::PlayDirectMusic(uint32 music_id, Player* target /*= NULL*/)
+{
+    WorldPacket data(SMSG_PLAY_MUSIC, 4);
+    data << uint32(music_id);
     if (target)
         target->SendDirectMessage(&data);
     else

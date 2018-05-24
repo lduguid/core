@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -226,6 +228,7 @@ Item::Item() : loot(NULL)
     m_container = NULL;
     mb_in_trade = false;
     m_lootState = ITEM_LOOT_NONE;
+    generatedLoot = false;
 }
 
 bool Item::Create(uint32 guidlow, uint32 itemid, ObjectGuid ownerGuid)
@@ -300,9 +303,9 @@ void Item::SaveToDB()
             static SqlStatementID updItem;
 
             SqlStatement stmt = (uState == ITEM_NEW) ?
-                                CharacterDatabase.CreateStatement(insItem, "REPLACE INTO item_instance (itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, text, guid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                                CharacterDatabase.CreateStatement(insItem, "REPLACE INTO item_instance (itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, text, generated_loot, guid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                                 :
-                                CharacterDatabase.CreateStatement(updItem, "UPDATE item_instance SET itemEntry = ?, owner_guid = ?, creatorGuid = ?, giftCreatorGuid = ?, count = ?, duration = ?, charges = ?, flags = ?, enchantments = ?, randomPropertyId = ?, durability = ?, text = ? WHERE guid = ?");
+                                CharacterDatabase.CreateStatement(updItem, "UPDATE item_instance SET itemEntry = ?, owner_guid = ?, creatorGuid = ?, giftCreatorGuid = ?, count = ?, duration = ?, charges = ?, flags = ?, enchantments = ?, randomPropertyId = ?, durability = ?, text = ?, generated_loot = ? WHERE guid = ?");
             stmt.addUInt32(GetEntry());
             stmt.addUInt32(GetOwnerGuid().GetCounter());
             stmt.addUInt32(GetGuidValue(ITEM_FIELD_CREATOR).GetCounter());
@@ -329,6 +332,7 @@ void Item::SaveToDB()
             stmt.addUInt16(GetItemRandomPropertyId());
             stmt.addUInt16(GetUInt32Value(ITEM_FIELD_DURABILITY));
             stmt.addUInt32(GetUInt32Value(ITEM_FIELD_ITEM_TEXT_ID));
+            stmt.addUInt8(generatedLoot); // can't use bool, SQL ERROR: Using unsupported buffer type: 16  (parameter: 13), todo, maybe.
             stmt.addUInt32(guid);
             stmt.Execute();
         }
@@ -380,7 +384,7 @@ void Item::SaveToDB()
 
     if (m_lootState == ITEM_LOOT_NEW || m_lootState == ITEM_LOOT_CHANGED)
     {
-        if (Player* owner = GetOwner())
+        if (auto ownerGuid = GetOwnerGuid())
         {
             static SqlStatementID saveGold ;
             static SqlStatementID saveLoot ;
@@ -389,17 +393,17 @@ void Item::SaveToDB()
             if (loot.gold)
             {
                 SqlStatement stmt = CharacterDatabase.CreateStatement(saveGold, "INSERT INTO item_loot (guid,owner_guid,itemid,amount,property) VALUES (?, ?, 0, ?, 0)");
-                stmt.PExecute(GetGUIDLow(), owner->GetGUIDLow(), loot.gold);
+                stmt.PExecute(GetGUIDLow(), ownerGuid.GetCounter(), loot.gold);
             }
 
             SqlStatement stmt = CharacterDatabase.CreateStatement(saveLoot, "INSERT INTO item_loot (guid,owner_guid,itemid,amount,property) VALUES (?, ?, ?, ?, ?)");
 
             // save items and quest items (at load its all will added as normal, but this not important for item loot case)
-            for (size_t i = 0; i < loot.GetMaxSlotInLootFor(owner); ++i)
+            for (size_t i = 0; i < loot.GetMaxSlotInLootFor(ownerGuid); ++i)
             {
                 QuestItem* qitem = NULL;
 
-                LootItem* item = loot.LootItemInSlot(i, owner, &qitem);
+                LootItem* item = loot.LootItemInSlot(i, ownerGuid, &qitem);
                 if (!item)
                     continue;
 
@@ -408,7 +412,7 @@ void Item::SaveToDB()
                     continue;
 
                 stmt.addUInt32(GetGUIDLow());
-                stmt.addUInt32(owner->GetGUIDLow());
+                stmt.addUInt32(ownerGuid);
                 stmt.addUInt32(item->itemid);
                 stmt.addUInt8(item->count);
                 stmt.addInt32(item->randomPropertyId);
@@ -427,9 +431,8 @@ void Item::SaveToDB()
 
 bool Item::LoadFromDB(uint32 guidLow, ObjectGuid ownerGuid, Field* fields, uint32 entry)
 {
-    //               0                1      2         3        4      5             6                 7           8     9
-    //SELECT creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, text FROM item_instance
-
+    //                0                1      2         3        4      5             6                 7           8     9       10         11
+    // SELECT creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, text, item_guid, itemEntry
     // create item before any checks for store correct guid
     // and allow use "FSetState(ITEM_REMOVED); SaveToDB();" for deleting item from DB
     Object::_Create(guidLow, 0, HIGHGUID_ITEM);
@@ -1023,6 +1026,7 @@ Item* Item::CloneItem(uint32 count, Player const* player) const
     newItem->SetUInt32Value(ITEM_FIELD_FLAGS,     GetUInt32Value(ITEM_FIELD_FLAGS));
     newItem->SetUInt32Value(ITEM_FIELD_DURATION,  GetUInt32Value(ITEM_FIELD_DURATION));
     newItem->SetItemRandomProperties(GetItemRandomPropertyId());
+    newItem->generatedLoot = generatedLoot;
     return newItem;
 }
 

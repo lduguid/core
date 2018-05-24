@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +26,7 @@
 #include "SharedDefines.h"
 #include "SpellAuras.h"
 #include "ObjectMgr.h"
+#include "World.h"
 
 /*#######################################
 ########                         ########
@@ -393,12 +396,25 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, fl
 
     if (IsInFeralForm())                                    // check if player is druid and in cat or bear forms, non main hand attacks not allowed for this mode so not check attack type
     {
-        uint32 lvl = getLevel();
-        if (lvl > 60)
-            lvl = 60;
+        /* Druids don't use weapons so a weapon damage index > 0 
+           should not affect their damage. Fixes crazy druid scaling
+           when using melee weapons with two or more damage types on it */
+        if (index > 0)
+        {
+            // Note that CalculateDamage will pull max_damage up to 5.0f, 
+            // so they'll still get some extra damage...
+            weapon_mindamage = 0.0f;
+            weapon_maxdamage = 0.0f;
+        }
+        else 
+        {
+            uint32 lvl = getLevel();
+            if (lvl > 60)
+                lvl = 60;
 
-        weapon_mindamage = lvl * 0.85f * att_speed;
-        weapon_maxdamage = lvl * 1.25f * att_speed;
+            weapon_mindamage = lvl * 0.85f * att_speed;
+            weapon_maxdamage = lvl * 1.25f * att_speed;
+        }
     }
     else if (!CanUseEquippedWeapon(attType))                // check if player not in form but still can't use weapon (broken/etc)
     {
@@ -677,6 +693,9 @@ bool Creature::UpdateAllStats()
     for (int i = SPELL_SCHOOL_NORMAL; i < MAX_SPELL_SCHOOL; ++i)
         UpdateResistances(i);
 
+    if (GetMaxPower(POWER_MANA))
+        UpdateManaRegen();
+
     return true;
 }
 
@@ -709,6 +728,18 @@ void Creature::UpdateMaxPower(Powers power)
 
     float value  = GetTotalAuraModValue(unitMod);
     SetMaxPower(power, uint32(value));
+}
+
+void Creature::UpdateManaRegen()
+{
+    float ManaIncreaseRate = sWorld.getConfig(CONFIG_FLOAT_RATE_POWER_MANA);
+    float Spirit = GetStat(STAT_SPIRIT);
+    // Apply PCT bonus from SPELL_AURA_MOD_POWER_REGEN_PERCENT aura on spirit base regen
+    float power_regen = GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_POWER_REGEN_PERCENT, POWER_MANA);
+    // Mana regen from SPELL_AURA_MOD_POWER_REGEN aura
+    float power_regen_mp5 = GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, POWER_MANA) / 5.0f;
+    
+    m_manaRegen = uint32(((Spirit / 5.0f + 17.0f) * power_regen + power_regen_mp5) * ManaIncreaseRate);
 }
 
 void Creature::UpdateAttackPowerAndDamage(bool ranged)
@@ -756,6 +787,13 @@ void Creature::UpdateDamagePhysical(WeaponAttackType attType)
 
     float weapon_mindamage = GetWeaponDamageRange(attType, MINDAMAGE);
     float weapon_maxdamage = GetWeaponDamageRange(attType, MAXDAMAGE);
+
+    // Disarm effects. Only applies to mobs with a weapon equipped. Sources suggest a 
+    // ~60% damage reduction on mobs which can be disarmed and have a weapon
+    // http://wowwiki.wikia.com/wiki/Attumen_the_Huntsman?oldid=1377353
+    // http://wowwiki.wikia.com/wiki/Disarm?direction=prev&oldid=200198
+    if (HasWeapon() && !CanUseEquippedWeapon(attType))
+        total_pct *= 0.4f;
 
     /* AP for units is 30% of base damage.
      * ie if AP is reduced to 0, attack will be reduced of 30%

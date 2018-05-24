@@ -15,6 +15,9 @@
 #define CAST_PET(a)     (dynamic_cast<Pet*>(a))
 #define CAST_AI(a,b)    (dynamic_cast<a*>(b))
 
+// Zerix: Select a random target (used in many scripts) at position 0.
+#define SELECT_RANDOM_TARGET_POS_0 me->SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 0)
+
 enum SCEquip
 {
     EQUIP_NO_CHANGE = -1,
@@ -43,7 +46,7 @@ struct MANGOS_DLL_DECL ScriptedAI : CreatureAI
     void EnterEvadeMode() override;
 
     //Called at any heal cast/item used (call non implemented in mangos)
-    void HealBy(Unit* /*pHealer*/, uint32 /*uiAmountHealed*/) override {}
+    void HealedBy(Unit* /*pHealer*/, uint32 /*uiAmountHealed*/) override {}
 
     // Called at any Damage to any victim (before damage apply)
     void DamageDeal(Unit* /*pDoneTo*/, uint32& /*uiDamage*/) override {}

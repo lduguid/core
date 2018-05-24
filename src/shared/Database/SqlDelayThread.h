@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -39,11 +41,13 @@ class SqlDelayThread : public ACE_Based::Runnable
         SqlConnection * m_dbConnection;                     ///< Pointer to DB connection
         volatile bool m_running;
 
+        int m_workerId;
+
         //process all enqueued requests
         void ProcessRequests();
 
     public:
-        SqlDelayThread(Database* db, SqlConnection* conn);
+        SqlDelayThread(Database* db, SqlConnection* conn, int workerId);
         ~SqlDelayThread();
 
         ///< Put sql statement to delay queue

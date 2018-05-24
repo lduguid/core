@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -83,6 +85,9 @@ void PetAI::UpdateAI(const uint32 diff)
     if (!m_creature->isAlive() || !m_creature->GetCharmInfo())
         return;
 
+    // part of it must run during eyes of the Beast to update melee hits
+    bool playerControlled = m_creature->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED);
+
     Unit* owner = m_creature->GetCharmerOrOwner();
 
     if (m_updateAlliesTimer <= diff)
@@ -94,7 +99,7 @@ void PetAI::UpdateAI(const uint32 diff)
     // First checking if we have some taunt on us
     Unit* tauntTarget = NULL;
     const Unit::AuraList& tauntAuras = m_creature->GetAurasByType(SPELL_AURA_MOD_TAUNT);
-    if (!tauntAuras.empty())
+    if (!tauntAuras.empty() && !playerControlled)
     {
         Unit* caster = NULL;
 
@@ -117,7 +122,7 @@ void PetAI::UpdateAI(const uint32 diff)
 
     if (m_creature->getVictim() && m_creature->getVictim()->isAlive())
     {
-        
+
         if (_needToStop())
         {
             _stopAttack();
@@ -141,7 +146,7 @@ void PetAI::UpdateAI(const uint32 diff)
                     owner->SetInCombatWith(v);
         }
     }
-    else
+    else if (!playerControlled)
     {
         if (m_creature->HasReactState(REACT_AGGRESSIVE) || m_creature->GetCharmInfo()->IsAtStay())
         {
@@ -155,11 +160,19 @@ void PetAI::UpdateAI(const uint32 diff)
             if (nextTarget)
                 AttackStart(nextTarget);
             else
+            {
+                if (m_creature->isInCombat())
+                    m_creature->CombatStop();
                 HandleReturnMovement();
+            }
         }
         else
             HandleReturnMovement();
     }
+
+    // End of possessed pet updates
+    if (playerControlled)
+        return;
 
     // Autocast (casted only in combat or persistent spells in any state)
     if (!m_creature->IsNonMeleeSpellCasted(false))
@@ -305,7 +318,7 @@ void PetAI::UpdateAI(const uint32 diff)
             else
                 m_creature->SendPetAIReaction();
 
-            spell->prepare(&targets);
+            spell->prepare(std::move(targets));
         }
 
         // deleted cached Spell objects
@@ -377,7 +390,11 @@ void PetAI::KilledUnit(Unit* victim)
     if (Unit* nextTarget = SelectNextTarget(false))
         AttackStart(nextTarget);
     else
+    {
+        if (m_creature->isInCombat())
+            m_creature->CombatStop();
         HandleReturnMovement(); // Return
+    }
 }
 
 void PetAI::AttackStart(Unit* target)
@@ -462,11 +479,6 @@ Unit* PetAI::SelectNextTarget(bool allowAutoSelect) const
     if (m_creature->HasReactState(REACT_PASSIVE))
         return NULL;
 
-    // Check pet attackers first so we don't drag a bunch of targets to the owner
-    if (Unit* myAttacker = m_creature->getAttackerForHelper())
-        if (!myAttacker->HasBreakableByDamageCrowdControlAura())
-            return myAttacker;
-
     // Not sure why we wouldn't have an owner but just in case...
     Unit* owner = m_creature->GetCharmerOrOwner();
     if (!owner)
@@ -474,7 +486,7 @@ Unit* PetAI::SelectNextTarget(bool allowAutoSelect) const
 
     // Check owner attackers
     if (Unit* ownerAttacker = owner->getAttackerForHelper())
-        if (!ownerAttacker->HasBreakableByDamageCrowdControlAura())
+        if (!ownerAttacker->HasBreakableByDamageCrowdControlAura() && owner->isInCombat())
             return ownerAttacker;
 
     // Check owner victim
@@ -502,7 +514,7 @@ void PetAI::HandleReturnMovement()
 
     // Prevent activating movement when under control of spells
     // such as "Eyes of the Beast"
-    if (m_creature->isCharmed())
+    if (m_creature->isCharmed() || m_creature ->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED))
         return;
 
     if (m_creature->GetCharmInfo()->HasCommandState(COMMAND_STAY))
@@ -515,7 +527,7 @@ void PetAI::HandleReturnMovement()
             m_creature->GetCharmInfo()->GetStayPosition(x, y, z);
             ClearCharmInfoFlags();
             m_creature->GetCharmInfo()->SetIsReturning(true);
-            m_creature->GetMotionMaster()->Clear();
+            m_creature->GetMotionMaster()->Clear(false);
             m_creature->GetMotionMaster()->MovePoint(m_creature->GetGUIDLow(), x, y, z);
         }
     }
@@ -525,7 +537,7 @@ void PetAI::HandleReturnMovement()
         {
             ClearCharmInfoFlags();
             m_creature->GetCharmInfo()->SetIsReturning(true);
-            m_creature->GetMotionMaster()->Clear();
+            m_creature->GetMotionMaster()->Clear(false);
             m_creature->GetMotionMaster()->MoveFollow(m_creature->GetCharmerOrOwner(), PET_FOLLOW_DIST, PET_FOLLOW_ANGLE);
         }
     }
@@ -557,6 +569,19 @@ void PetAI::DoAttack(Unit* target, bool chase)
             m_creature->GetCharmInfo()->SetIsAtStay(true);
             m_creature->GetMotionMaster()->Clear();
             m_creature->GetMotionMaster()->MoveIdle();
+        }
+
+        // Flag owner for PvP if owner is player and target is flagged
+        Unit* owner = m_creature->GetCharmerOrOwner();
+        if (owner && owner->IsPlayer() && !owner->IsPvP())
+        {
+            Player* pOwner = owner->ToPlayer();
+            if ((target->IsPlayer() && target->IsPvP() && !pOwner->IsInDuelWith((Player*)target)) || // PvP flagged players
+                (target->IsCreature() && target->IsPvP()))                                           // PvP flagged creatures
+            {
+                pOwner->UpdatePvP(true);
+                pOwner->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_ENTER_PVP_COMBAT);
+            }
         }
     }
 }

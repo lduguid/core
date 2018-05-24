@@ -152,6 +152,8 @@ enum
     NPC_PLAGUEMAW_THE_ROTTING = 7356,
 
     GO_BELNISTRASZ_BRAZIER = 152097,
+    GO_IDOL_OVEN_FIRE = 151951,
+    GO_IDOL_MOUTH_FIRE = 151973,
 
     SPELL_ARCANE_INTELLECT = 13326, // use this somewhere (he has it as default)
     SPELL_FIREBALL = 9053,
@@ -175,12 +177,14 @@ struct npc_belnistraszAI : public npc_escortAI
 {
     npc_belnistraszAI(Creature* pCreature) : npc_escortAI(pCreature)
     {
+        pInstance = (ScriptedInstance*)pCreature->GetInstanceData();
         m_uiRitualPhase = 0;
         m_uiRitualTimer = 1000;
         m_bAggro = false;
         Reset();
     }
 
+    ScriptedInstance* pInstance;
     uint8 m_uiRitualPhase;
     uint32 m_uiRitualTimer;
     bool m_bAggro;
@@ -205,6 +209,14 @@ struct npc_belnistraszAI : public npc_escortAI
             return;
         }
         ScriptedAI::AttackedBy(pAttacker);
+    }
+
+    void AttackStart(Unit* pWho) override
+    {
+        if (HasEscortState(STATE_ESCORT_PAUSED) && (m_uiRitualPhase > 0))
+            return;
+
+        npc_escortAI::AttackStart(pWho);
     }
 
     void SpawnerSummon(Creature* pSummoner)
@@ -272,6 +284,7 @@ struct npc_belnistraszAI : public npc_escortAI
                 switch (m_uiRitualPhase)
                 {
                     case 0:
+                        SetCombatMovement(false);
                         DoCastSpellIfCan(m_creature, SPELL_IDOL_SHUTDOWN);
                         m_uiRitualTimer = 1000;
                         break;
@@ -317,16 +330,15 @@ struct npc_belnistraszAI : public npc_escortAI
                         if (Player* pPlayer = GetPlayerForEscort())
                         {
                             pPlayer->GroupEventHappens(QUEST_EXTINGUISHING_THE_IDOL, m_creature);
-                            if (GameObject* pGo = GetClosestGameObjectWithEntry(m_creature, GO_BELNISTRASZ_BRAZIER, 10.0f))
-                            {
-                                if (!pGo->isSpawned())
-                                {
-                                    pGo->SetRespawnTime(HOUR * IN_MILLISECONDS);
-                                    pGo->Refresh();
-                                }
-                            }
                         }
                         m_creature->RemoveAurasDueToSpell(SPELL_IDOL_SHUTDOWN);
+                        m_creature->SummonGameObject(GO_BELNISTRASZ_BRAZIER, 2577.196f, 947.0781f, 53.16757f, 2.356195f, 0, 0, 0.9238796f, 0.3826832f, 3600);
+                        if (GameObject* pGoOvenFire = GetClosestGameObjectWithEntry(m_creature, GO_IDOL_OVEN_FIRE, 50))
+                            pGoOvenFire->SetLootState(GO_JUST_DEACTIVATED);
+                        if (GameObject* pGoMouthFire = GetClosestGameObjectWithEntry(m_creature, GO_IDOL_MOUTH_FIRE, 50))
+                            pGoMouthFire->SetLootState(GO_JUST_DEACTIVATED);
+                        if (pInstance)
+                            pInstance->SetData(EXTINGUISH_FIRES, 0);
                         SetEscortPaused(false);
                         break;
                     }
@@ -357,7 +369,8 @@ struct npc_belnistraszAI : public npc_escortAI
         else
             m_uiFrostNovaTimer -= uiDiff;
 
-        DoMeleeAttackIfReady();
+        if (!HasEscortState(STATE_ESCORT_PAUSED))
+            DoMeleeAttackIfReady();
     }
 
 };
@@ -472,12 +485,12 @@ void AddSC_razorfen_downs()
     newscript->pGossipHello = &GossipHello_npc_henry_stern;
     newscript->pGossipSelect = &GossipSelect_npc_henry_stern;
     newscript->RegisterSelf();
-
+    /*
     newscript = new Script;
     newscript->Name = "go_holding_pen";
     newscript->pGOHello = &GOHello_go_holding_pen;
     newscript->RegisterSelf();
-
+    */
     newscript = new Script;
     newscript->Name = "boss_lady_faltheress";
     newscript->GetAI = &GetAI_boss_ladyFaltheress;
@@ -493,12 +506,12 @@ void AddSC_razorfen_downs()
     newscript->Name = "go_gong";
     newscript->pGOHello =           &GOHello_go_gong;
     newscript->RegisterSelf();
-
+    /*
     newscript = new Script;
     newscript->Name = "go_belnistrasz";
     newscript->pQuestRewardedGO = &GOQuestRewarded_go_belnistrasz;
     newscript->RegisterSelf();
-
+    */
     newscript = new Script;
     newscript->Name = "npc_tomb_creature";
     newscript->GetAI = &GetAI_npc_tomb_creature;

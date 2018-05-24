@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -1011,8 +1013,9 @@ void WorldSession::HandleAutoStoreBankItemOpcode(WorldPacket& recvPacket)
         }
 
         _player->RemoveItem(srcbag, srcslot, true);
-        if (Item const* storedItem = _player->StoreItem(dest, pItem, true))
-            _player->ItemAddedQuestCheck(storedItem->GetEntry(), storedItem->GetCount());
+        Item const* storedItem = _player->StoreItem(dest, pItem, true);
+        if (storedItem)
+            _player->ItemAddedQuestCheck(storedItem->GetEntry(), 0);
     }
     else                                                    // moving from inventory to bank
     {
@@ -1185,6 +1188,14 @@ void WorldSession::HandleWrapItemOpcode(WorldPacket& recv_data)
     if (item->GetProto()->MaxCount > 0)
     {
         _player->SendEquipError(EQUIP_ERR_UNIQUE_CANT_BE_WRAPPED, item, NULL);
+        return;
+    }
+
+    // don't allow wrapping while casting - fixes an exploit where you could use
+    // items multiple times by wrapping them during use
+    if (_player->IsNonMeleeSpellCasted(true, false, false))
+    {
+        _player->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, item, NULL);
         return;
     }
 

@@ -8,8 +8,9 @@ EndContentData */
 #include "scriptPCH.h"
 #include "stratholme.h"
 
-#define TEXTE_CRISTAL_MORT         -20003
-#define TEXTE_CRISTAL_TOUS_MORT    -20004
+#define SAY_CRYSTAL_DESTROYED         -1900116
+#define SAY_ALL_CRYSTALS_DESTROYED    -1900115
+#define SAY_SCOURGE_HAVE_BROKEN_IN    -1900114
 /*######
 ## go_gauntlet_gate (this is the _first_ of the gauntlet gates, two exist)
 ######*/
@@ -50,10 +51,45 @@ bool GOHello_go_entree_de_service(Player* pPlayer, GameObject* pGo)
             continue;
 
         (*itr)->AI()->ReceiveEmote(pPlayer, 1000);
+        (*itr)->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE);
     }
     pGo->UseDoorOrButton(5);
 
     return true;
+}
+
+/*######
+## go_stratholme_postbox
+######*/
+
+bool GOOpen_go_stratholme_postbox(Player* pPlayer, GameObject* pGo)
+{
+    ScriptedInstance* pInstance = (ScriptedInstance*)pGo->GetInstanceData();
+
+    if (!pInstance)
+        return false;
+
+    if (pInstance->GetData(TYPE_POSTMASTER) == DONE)
+        return false;
+
+    // When the data is Special, spawn the postmaster
+    if (pInstance->GetData(TYPE_POSTMASTER) == SPECIAL)
+    {
+        pPlayer->CastSpell(pPlayer, SPELL_SUMMON_POSTMASTER, true);
+        pInstance->SetData(TYPE_POSTMASTER, DONE);
+    }
+    else
+        pInstance->SetData(TYPE_POSTMASTER, IN_PROGRESS);
+
+    // Summon 3 postmen for each postbox
+    float fX, fY, fZ;
+    for (uint8 i = 0; i < 3; ++i)
+    {
+        pPlayer->GetRandomPoint(pPlayer->GetPositionX(), pPlayer->GetPositionY(), pPlayer->GetPositionZ(), 6.0f, fX, fY, fZ);
+        pPlayer->SummonCreature(NPC_UNDEAD_POSTMAN, fX, fY, fZ, 0.0f, TEMPSUMMON_DEAD_DESPAWN, 0);
+    }
+
+    return false;
 }
 
 /*######
@@ -306,12 +342,12 @@ struct mobs_cristal_zugguratAI : public ScriptedAI
     {
         if (Creature* pop = m_creature->SummonCreature(10399, m_creature->GetPositionX(), m_creature->GetPositionY(), m_creature->GetPositionZ() - 100, 0, TEMPSUMMON_TIMED_DESPAWN, 1))
         {
-            pop->MonsterYellToZone(TEXTE_CRISTAL_MORT, LANG_UNIVERSAL, 0);
+            pop->MonsterYellToZone(SAY_CRYSTAL_DESTROYED, LANG_UNIVERSAL, 0);
             if (m_pInstance)
             {
                 m_pInstance->SetData(TYPE_CRISTAL_DIE, IN_PROGRESS);
                 if (m_pInstance->GetData(TYPE_CRISTAL_ALL_DIE) == DONE)
-                    pop->MonsterYellToZone(TEXTE_CRISTAL_TOUS_MORT, LANG_UNIVERSAL, 0);
+                    pop->MonsterYellToZone(SAY_ALL_CRYSTALS_DESTROYED, LANG_UNIVERSAL, 0);
             }
         }
     }
@@ -837,7 +873,7 @@ struct npc_couloir_trigger1AI : public ScriptedAI
                     if (Crea->isAlive() && !Crea->isInCombat())
                     {
                         //"The scourge has broken into our bastion!"
-                        Crea->MonsterYellToZone(-20005);
+                        Crea->MonsterYellToZone(SAY_SCOURGE_HAVE_BROKEN_IN);
                     }
                     else
                         return;
@@ -983,7 +1019,7 @@ struct npc_Scourge_TriggerAI : public ScriptedAI
                     if (Crea->isAlive() && !Crea->isInCombat())
                     {
                         //"The scourge has broken into our bastion!"
-                        Crea->MonsterYellToZone(-20005);
+                        Crea->MonsterYellToZone(SAY_SCOURGE_HAVE_BROKEN_IN);
                     }
                     else
                         return;
@@ -1196,6 +1232,11 @@ void AddSC_stratholme()
     newscript->RegisterSelf();
 
     newscript = new Script;
+    newscript->Name = "go_stratholme_postbox";
+    newscript->GOOpen = &GOOpen_go_stratholme_postbox;
+    newscript->RegisterSelf();
+
+    newscript = new Script;
     newscript->Name = "mob_freed_soul";
     newscript->GetAI = &GetAI_mob_freed_soul;
     newscript->RegisterSelf();
@@ -1214,12 +1255,12 @@ void AddSC_stratholme()
     newscript->Name = "mobs_cristal_zuggurat";
     newscript->GetAI = &GetAI_mobs_cristal_zuggurat;
     newscript->RegisterSelf();
-
+    /*
     newscript = new Script;
     newscript->Name = "mobs_rat_pestifere";
     newscript->GetAI = &GetAI_mobs_rat_pestifere;
     newscript->RegisterSelf();
-
+    */
     newscript = new Script;
     newscript->Name = "npc_Aurius";
     newscript->GetAI = &GetAI_npc_aurius;

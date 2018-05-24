@@ -157,13 +157,14 @@ if(NOT USE_STD_MALLOC)
   unset(TBB_LIBRARIES_RELEASE       CACHE)
   unset(TBB_LIBRARIES_DEBUG         CACHE)
 
+  set(TBB_USE_DEBUG_BUILD ${TBB_DEBUG})
   find_package(TBB COMPONENTS tbbmalloc)
   if(NOT TBB_FOUND)
     message(FATAL_ERROR
-      "This project requires TBB installed. Please download the TBB Stable Release from http://www.threadingbuildingblocks.org/ and install it. If this script didn't find TBB and it was correctly installed please set TBB_ROOT to the correct path."
+      "This project requires TBB installed. Please download the TBB Stable Release from http://www.threadingbuildingblocks.org/ and install it. If this script didn't find TBB and it was correctly installed please set TBB_ROOT_DIR to the correct path."
     )
   endif()
-  
+
   if(TBB_DEBUG)
     set(TBB_LIBRARIES
       ${TBB_LIBRARIES_DEBUG}
@@ -330,12 +331,12 @@ if(UNIX)
     #set(BUILD_ADDITIONAL_FLAGS "${BUILD_ADDITIONAL_FLAGS} -fsanitize=unsigned-integer-overflow")
   endif()
 
-  set(BUILD_ADDITIONAL_FLAGS "${BUILD_ADDITIONAL_FLAGS} -std=c++14 --no-warnings -fexceptions -fnon-call-exceptions -march=native -mtune=native -pipe ")
+  set(BUILD_ADDITIONAL_FLAGS "${BUILD_ADDITIONAL_FLAGS} -std=c++14 --no-warnings -fexceptions -fnon-call-exceptions -march=native -O3 -pipe ")
   if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(PROFILE_GENERATE)
       set(BUILD_ADDITIONAL_FLAGS "${BUILD_ADDITIONAL_FLAGS} -fprofile-generate")
     elseif(PROFILE_USE)
-      set(BUILD_ADDITIONAL_FLAGS "${BUILD_ADDITIONAL_FLAGS} -fprofile-use=${GCC_PROFILE_USE} -fprofile-correction -Wno-error=coverage-mismatch")
+      set(BUILD_ADDITIONAL_FLAGS "${BUILD_ADDITIONAL_FLAGS} -fprofile-use -fprofile-correction -Wno-error=coverage-mismatch")
     endif()
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     if(PROFILE_GENERATE)
@@ -421,6 +422,12 @@ add_subdirectory(dep)
 
 #TODO: need fully implementation
 if (USE_EXTRACTORS)
+	add_subdirectory(dep/loadlib)
+	add_subdirectory(dep/libmpq)
+	add_subdirectory(dep/src/bzip2)
+	add_subdirectory(contrib/extractor)
+	add_subdirectory(contrib/vmap_extractor)
+	add_subdirectory(contrib/vmap_assembler)
 	add_subdirectory(contrib/mmap)
 endif()
 

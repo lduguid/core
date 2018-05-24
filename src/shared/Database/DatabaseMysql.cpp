@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -137,6 +139,22 @@ bool MySQLConnection::OpenConnection(bool reconnect)
     }
 }
 
+bool MySQLConnection::Reconnect()
+{
+    sLog.outString("Reconnection attempt to database %s (on %s)", m_database.c_str(), m_host.c_str());
+
+    if (OpenConnection(true))
+    {
+        FreePreparedStatements(); // We need to prepare everything again!
+        sLog.outString("Successfully reconnected to %s @%s:%u.",
+            m_database.c_str(), m_host.c_str(), m_port);
+
+        return true;
+    }
+
+    return false; // Failed to reconnect
+}
+
 bool MySQLConnection::HandleMySQLError(uint32 errNo)
 {
     switch (errNo)
@@ -146,21 +164,8 @@ bool MySQLConnection::HandleMySQLError(uint32 errNo)
         case CR_INVALID_CONN_HANDLE:
         case CR_SERVER_LOST_EXTENDED:
         {
-            uint64 oldThreadId = mysql_thread_id(mMysql);
             mysql_close(mMysql);
-
-            if (OpenConnection(true))
-            {
-                FreePreparedStatements(); // We need to prepare everything again!
-                sLog.outString("Reconnection attempt to database %s (on %s)", m_database.c_str(), m_host.c_str());
-                if (oldThreadId != mysql_thread_id(mMysql))
-                    sLog.outString("Successfully reconnected to %s @%s:%u.",
-                        m_database.c_str(), m_host.c_str(), m_port);
-
-                return true;
-            }
-
-            return false; // Failed to reconnect
+            return Reconnect();
         }
 
         case ER_LOCK_DEADLOCK:
@@ -188,8 +193,11 @@ bool MySQLConnection::HandleMySQLError(uint32 errNo)
 
 bool MySQLConnection::_Query(const char *sql, MYSQL_RES **pResult, MYSQL_FIELD **pFields, uint64* pRowCount, uint32* pFieldCount)
 {
-    if (!mMysql)
-        return 0;
+    if (!mMysql && !Reconnect())
+    {
+        return false;
+    }
+        
 
     uint32 _s = WorldTimer::getMSTime();
 

@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -173,13 +175,6 @@ const float BG_AB_BuffPositions[BG_AB_NODES_MAX][4] = {
     {1147.091f, 816.8362f, -98.39896f, 6.056293f}          // gold mine
 };
 
-struct BG_AB_BannerTimer
-{
-    uint32      timer;
-    uint8       type;
-    uint8       teamIndex;
-};
-
 class BattleGroundABScore : public BattleGroundScore
 {
     public:
@@ -218,7 +213,7 @@ class BattleGroundAB : public BattleGround
 
     private:
         /* Gameobject spawning/despawning */
-        void _CreateBanner(uint8 node, uint8 type, uint8 teamIndex, bool delay);
+        void _CreateBanner(uint8 node, uint8 type, uint8 teamIndex);
         void _DelBanner(uint8 node, uint8 type, uint8 teamIndex);
         void _SendNodeUpdate(uint8 node);
 
@@ -236,7 +231,6 @@ class BattleGroundAB : public BattleGround
             4: horde occupied     */
         uint8               m_Nodes[BG_AB_NODES_MAX];
         uint8               m_prevNodes[BG_AB_NODES_MAX];   // used for performant wordlstate-updating
-        BG_AB_BannerTimer   m_BannerTimers[BG_AB_NODES_MAX];
         uint32              m_NodeTimers[BG_AB_NODES_MAX];
         uint32              m_lastTick[BG_TEAMS_COUNT];
         uint32              m_HonorScoreTics[BG_TEAMS_COUNT];

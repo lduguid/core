@@ -107,6 +107,7 @@ struct boss_lordkazzakAI : public ScriptedAI
 {
     boss_lordkazzakAI(Creature *c) : ScriptedAI(c)
     {
+        c->SetLootAndXPModDist(150.0f);
         Reset();
     }
 
@@ -342,10 +343,11 @@ void AddSC_boss_lord_kazzak()
     newscript->Name = "boss_lord_kazzak";
     newscript->GetAI = &GetAI_boss_lordkazzak;
     newscript->RegisterSelf();
-
+    /*
     newscript = new Script;
     newscript->Name = "boss_spirit_lord_kazzak";
     newscript->GetAI = &GetAI_boss_spirit_lordkazzak;
     newscript->RegisterSelf();
+    */
 }
 

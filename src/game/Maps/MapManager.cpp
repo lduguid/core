@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +31,7 @@
 #include "ObjectMgr.h"
 #include "ZoneScriptMgr.h"
 #include "Map.h"
+#include "MoveMap.h"
 
 typedef MaNGOS::ClassLevelLockable<MapManager, ACE_Recursive_Thread_Mutex> MapManagerLock;
 INSTANTIATE_SINGLETON_2(MapManager, MapManagerLock);
@@ -260,6 +263,8 @@ public:
             ++loops;
         }
         while (!(*updateFinished));
+
+        MMAP::MMapFactory::createOrGetMMapManager()->CleanUpCurrentThreadNavQuery();
         WorldDatabase.ThreadEnd();
     }
     std::vector<Map*> maps;
@@ -279,6 +284,8 @@ public:
     {
         WorldDatabase.ThreadStart();
         map->DoUpdate(diff);
+
+        MMAP::MMapFactory::createOrGetMMapManager()->CleanUpCurrentThreadNavQuery();
         WorldDatabase.ThreadEnd();
     }
     Map* map;
@@ -345,6 +352,8 @@ void MapManager::Update(uint32 diff)
     for (int tid = instanceUpdaters.size(); tid < asyncUpdateThreads.size(); ++tid)
     {
         asyncUpdateThreads[tid]->wait();
+        // Thread has finished. Remove any nav mesh queries from the MMapManager
+        //MMAP::MMapFactory::createOrGetMMapManager()->CleanUpNavQuery(asyncUpdateThreads[tid]->currentId());
         delete asyncUpdateThreads[tid];
     }
 
@@ -358,6 +367,7 @@ void MapManager::Update(uint32 diff)
         delete asyncUpdateThreads[tid];
     }
     delete[] i_continentUpdateFinished;
+    i_continentUpdateFinished = NULL;
 
     MapMapType::iterator crashedMapsIter = i_maps.begin();
     while (crashedMapsIter != i_maps.end())

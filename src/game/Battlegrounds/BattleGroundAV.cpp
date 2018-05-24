@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -1182,6 +1184,7 @@ void BattleGroundAV::PopulateNode(BG_AV_Nodes node)
     BattleGroundAVTeamIndex NewteamIdx = m_Nodes[node].Owner;
     BattleGroundAVTeamIndex OldteamIdx = m_Nodes[node].PrevOtherOwner;
 
+    uint32 delay = 0;
     if (IsGrave(node))
     {
         uint32 graveDefenderTypeNew;
@@ -1215,11 +1218,13 @@ void BattleGroundAV::PopulateNode(BG_AV_Nodes node)
             SetSpawnEventMode(BG_AV_NODES_MAX + node, NewteamIdx * BG_AV_MAX_GRAVETYPES + graveDefenderTypeNew, RESPAWN_FORCED);
             // En cas de prise du flag (destroy node)
             SpawnEvent(BG_AV_NODES_MAX + node, NewteamIdx * BG_AV_MAX_GRAVETYPES + graveDefenderTypeNew, true, true);
+            delay = 5;
         }
         else
         {
             // En cas de capture du flag (assault node) -> on ne despawn pas l event -> juste stop le repop
             SetSpawnEventMode(BG_AV_NODES_MAX + node, OldteamIdx * BG_AV_MAX_GRAVETYPES + graveDefenderTypeOld, RESPAWN_STOP);
+            delay = 1;
         }
     }
     if (IsTower(node) && NewteamIdx != BG_AV_TEAM_NEUTRAL)
@@ -1228,13 +1233,15 @@ void BattleGroundAV::PopulateNode(BG_AV_Nodes node)
         {
             SetSpawnEventMode(BG_AV_NODES_MAX + node, (NewteamIdx * BG_AV_MAX_STATES) + 1, RESPAWN_FORCED);
             SpawnEvent(BG_AV_NODES_MAX + node, (NewteamIdx * BG_AV_MAX_STATES) + 1, true, true);
+            delay = 5;
         }
         else // we despawn the event from the prevowner
         {
             SetSpawnEventMode(BG_AV_NODES_MAX + node, (OldteamIdx * BG_AV_MAX_STATES) + 1, RESPAWN_STOP);
+            delay = 1;
         }
     }
-    SpawnEvent(node, (NewteamIdx * BG_AV_MAX_STATES) + m_Nodes[node].State, true, true);
+    SpawnEvent(node, (NewteamIdx * BG_AV_MAX_STATES) + m_Nodes[node].State, true, true, delay);
 }
 
 
@@ -1247,6 +1254,7 @@ void BattleGroundAV::EventPlayerClickedOnFlag(Player *source, GameObject* target
     uint8 event = (sBattleGroundMgr.GetGameObjectEventIndex(target_obj->GetGUIDLow())).event1;
     if (event >= BG_AV_NODES_MAX)                           // not a node
         return;
+
     BG_AV_Nodes node = BG_AV_Nodes(event);
     switch ((sBattleGroundMgr.GetGameObjectEventIndex(target_obj->GetGUIDLow())).event2 % BG_AV_MAX_STATES)
     {

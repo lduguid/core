@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -107,6 +109,18 @@ VisibleNotifier::Notify()
                 plr->UpdateVisibilityOf(plr->GetCamera().GetBody(), &player);
         }
     }
+
+    // for every new visible unit send attack stance if needed
+    for (Object const* obj : i_visibleNow)
+        if (Unit const* unit = obj->ToUnit())
+            if (unit->hasUnitState(UNIT_STAT_MELEE_ATTACKING))
+                if (Unit const* victim = unit->getVictim())
+                {
+                    WorldPacket data(SMSG_ATTACKSTART, 8 + 8);
+                    data << unit->GetObjectGuid();
+                    data << victim->GetObjectGuid();
+                    player.SendDirectMessage(&data);
+                }
 }
 
 void

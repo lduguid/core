@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -69,12 +71,6 @@ void WorldSession::HandleRepopRequestOpcode(WorldPacket & /*recv_data*/)
         player->KillPlayer();
     }
 
-    // Waiting to Resurrect (probably redundant cast, yet to check thoroughly)
-    if (player->InBattleGround())
-        player->CastSpell(player, 2584, true);
-
-    //this is spirit release confirm?
-    player->RemovePet(PET_SAVE_REAGENTS);
     player->BuildPlayerRepop();
     player->RepopAtGraveyard();
 }
@@ -100,6 +96,9 @@ public:
         AccountTypes security = sess->GetSecurity();
         bool allowTwoSideWhoList = sWorld.getConfig(CONFIG_BOOL_ALLOW_TWO_SIDE_WHO_LIST);
         AccountTypes gmLevelInWhoList = (AccountTypes)sWorld.getConfig(CONFIG_UINT32_GM_LEVEL_IN_WHO_LIST);
+
+        const uint32 zone = sess->GetPlayer()->GetCachedZoneId();
+        const bool notInBattleground = !((zone == 2597) || (zone == 3277) || (zone == 3358));
 
         WorldPacket data(SMSG_WHO, 50);                         // guess size
         data << uint32(clientcount);                            // clientcount place holder, listed count
@@ -170,7 +169,9 @@ public:
             {
                 if (zoneids[i] == pzoneid)
                 {
-                    z_show = true;
+                    // World of Warcraft Client Patch 1.7.0 (2005-09-13)
+                    // Using the / who command while in a Battleground instance will now only display players in your instance.
+                    z_show = (zone != pzoneid) || notInBattleground || (sess->GetPlayer()->GetInstanceId() == pl->GetInstanceId());
                     break;
                 }
 
@@ -333,7 +334,7 @@ void WorldSession::HandleLogoutRequestOpcode(WorldPacket & /*recv_data*/)
     if (GetPlayer()->CanFreeMove())
     {
         float height = GetPlayer()->GetMap()->GetHeight(GetPlayer()->GetPositionX(), GetPlayer()->GetPositionY(), GetPlayer()->GetPositionZ());
-        if ((GetPlayer()->GetPositionZ() < height + 0.1f) && !(GetPlayer()->IsInWater()))
+        if ((GetPlayer()->GetPositionZ() < height + 0.1f) && !(GetPlayer()->IsInWater()) && GetPlayer()->getStandState() == UNIT_STAND_STATE_STAND)
             GetPlayer()->SetStandState(UNIT_STAND_STATE_SIT);
 
         GetPlayer()->SetMovement(MOVE_ROOT);
@@ -412,6 +413,16 @@ void WorldSession::HandleZoneUpdateOpcode(WorldPacket & recv_data)
     uint32 newzone, newarea;
     GetPlayer()->GetZoneAndAreaId(newzone, newarea);
     GetPlayer()->UpdateZone(newzone, newarea);
+
+    // Trigger a client camera reset by sending an `SMSG_STANDSTATE_UPDATE'
+    // event. See `WorldSession::HandleMoveWorldportAckOpcode'.
+    // Note: There might be a better place to perform this trigger
+    if (GetPlayer()->m_movementInfo.HasMovementFlag(MOVEFLAG_ONTRANSPORT))
+    {
+        WorldPacket data(SMSG_STANDSTATE_UPDATE, 1);
+        data << GetPlayer()->getStandState();
+        GetPlayer()->GetSession()->SendPacket(&data);
+    }
 }
 
 void WorldSession::HandleSetTargetOpcode(WorldPacket & recv_data)
@@ -445,9 +456,9 @@ void WorldSession::HandleSetSelectionOpcode(WorldPacket & recv_data)
         if (FactionTemplateEntry const* factionTemplateEntry = sFactionTemplateStore.LookupEntry(unit->getFaction()))
             _player->GetReputationMgr().SetVisible(factionTemplateEntry);
 
-    // Perte des points de combo si changement de cible, pour les voleurs.
-    // (Les wars utilisent les points de combo en interne pour gerer Fulgurance)
-    if (_player->getPowerType() == POWER_ENERGY && unit && guid != _player->GetComboTargetGuid())
+    // Drop combo points only for rogues and druids
+    // Warriors use combo points internally, do no reset for everyone
+    if ((_player->getClass() == CLASS_ROGUE || _player->getClass() == CLASS_DRUID) && unit && guid != _player->GetComboTargetGuid())
         _player->ClearComboPoints();
 
     // Update autoshot if need
@@ -750,7 +761,7 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket & recv_data)
                 pl->AreaExploredOrEventHappens(quest_id);
         }
     }
-    
+
     // enter to tavern, not overwrite city rest
     if (sObjectMgr.IsTavernAreaTrigger(Trigger_ID))
     {
@@ -799,6 +810,10 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket & recv_data)
     if (!targetMapEntry)
         return;
 
+    auto playerRank = sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_ZONE_REQUIREMENTS) ?
+        GetPlayer()->GetHonorMgr().GetRank().visualRank
+        : GetPlayer()->GetHonorMgr().GetHighestRank().visualRank;
+
     if (!pl->isGameMaster())
     {
         // (Hack) : Entree dans les zones de recompenses JcJ
@@ -806,7 +821,7 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket & recv_data)
         {
             if (GetPlayer()->GetTeam() == HORDE)
             {
-                if (GetPlayer()->GetHonorMgr().GetHighestRank().visualRank < 6)
+                if (playerRank < 6)
                 {
                     SendAreaTriggerMessage("You must have the rank Stone Guard to enter");
                     return;
@@ -822,7 +837,7 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPacket & recv_data)
         {
             if (GetPlayer()->GetTeam() == ALLIANCE)
             {
-                if (GetPlayer()->GetHonorMgr().GetHighestRank().visualRank < 6)
+                if (playerRank < 6)
                 {
                     SendAreaTriggerMessage("You must have the rank Knight to enter");
                     return;

@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -155,10 +157,10 @@ bool MailDraft::prepareItems(Player* receiver)
     // can be empty
     mailLoot.FillLoot(m_mailTemplateId, LootTemplates_Mail, receiver, true, true);
 
-    uint32 max_slot = mailLoot.GetMaxSlotInLootFor(receiver);
+    uint32 max_slot = mailLoot.GetMaxSlotInLootFor(receiver->GetGUIDLow());
     for (uint32 i = 0; m_items.size() < MAX_MAIL_ITEMS && i < max_slot; ++i)
     {
-        if (LootItem* lootitem = mailLoot.LootItemInSlot(i, receiver))
+        if (LootItem* lootitem = mailLoot.LootItemInSlot(i, receiver->GetGUIDLow()))
         {
             if (Item* item = Item::CreateItem(lootitem->itemid, lootitem->count, receiver))
             {
@@ -387,10 +389,10 @@ void Mail::prepareTemplateItems(Player* receiver)
     CharacterDatabase.BeginTransaction();
     CharacterDatabase.PExecute("UPDATE mail SET has_items = 1 WHERE id = %u", messageID);
 
-    uint32 max_slot = mailLoot.GetMaxSlotInLootFor(receiver);
+    uint32 max_slot = mailLoot.GetMaxSlotInLootFor(receiver->GetGUIDLow());
     for (uint32 i = 0; items.size() < MAX_MAIL_ITEMS && i < max_slot; ++i)
     {
-        if (LootItem* lootitem = mailLoot.LootItemInSlot(i, receiver))
+        if (LootItem* lootitem = mailLoot.LootItemInSlot(i, receiver->GetGUIDLow()))
         {
             if (Item* item = Item::CreateItem(lootitem->itemid, lootitem->count, receiver))
             {

@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -63,6 +65,8 @@ void WorldSession::HandleGMTicketUpdateTextOpcode(WorldPacket & recv_data)
             ticket->SetTicketType(TicketType(type));
             ticket->SaveToDB();
             response = GMTICKET_RESPONSE_UPDATE_SUCCESS;
+
+            sWorld.SendGMTicketText(LANG_COMMAND_TICKETUPDATED, GetPlayer()->GetName(), ticket->GetId());
         }
     }
 
@@ -79,7 +83,7 @@ void WorldSession::HandleGMTicketDeleteTicketOpcode(WorldPacket & /*recv_data*/)
         data << uint32(GMTICKET_RESPONSE_TICKET_DELETED);
         SendPacket(&data);
 
-        //sWorld.SendGMTicketText(LANG_COMMAND_TICKETPLAYERABANDON, GetPlayer()->GetName(), ticket->GetId());
+        sWorld.SendGMTicketText(LANG_COMMAND_TICKETPLAYERABANDON, GetPlayer()->GetName(), ticket->GetId());
 
         sTicketMgr->CloseTicket(ticket->GetId(), GetPlayer()->GetGUID());
         sTicketMgr->SendTicket(this, NULL);
@@ -123,13 +127,11 @@ void WorldSession::HandleGMTicketCreateOpcode(WorldPacket& recvData)
         if (ticketType >= GMTICKET_MAX)
             return;
 
-        if (ticketType != GMTICKET_BEHAVIOR_HARASSMENT && ticketType != GMTICKET_STUCK)
-        {
-            ChatHandler(this).SendSysMessage("Game Masters do not handle bug reports.");
-            ChatHandler(this).SendSysMessage("Please use our bugtracker and provide sources if possible.");
-            ChatHandler(this).SendSysMessage("https://elysium-project.org/bugtracker");
-            return;
-        }
+        ChatHandler(this).SendSysMessage("NOTE: Game Masters DO NOT handle bug reports!");
+        ChatHandler(this).SendSysMessage("Please use our bugtracker and provide sources if possible:");
+        ChatHandler(this).SendSysMessage("https://github.com/elysium-project/server/issues");
+        ChatHandler(this).SendSysMessage("For quicker & casual support, visit our forums:");
+        ChatHandler(this).SendSysMessage("https://forum.elysium-project.org/forum/303-help-support/");
 
         ticket = new GmTicket(GetPlayer());
         ticket->SetPosition(mapId, x, y, z);
@@ -139,7 +141,7 @@ void WorldSession::HandleGMTicketCreateOpcode(WorldPacket& recvData)
         sTicketMgr->AddTicket(ticket);
         sTicketMgr->UpdateLastChange();
 
-        sWorld.SendGMTicketText(LANG_COMMAND_TICKETNEW, GetPlayer()->GetName(), ticket->GetId());
+        sWorld.SendGMTicketText(LANG_COMMAND_TICKETNEW, GetPlayer()->GetName(), ticket->GetTicketCategoryName(TicketType(ticketType)), ticket->GetId());
 
         response = GMTICKET_RESPONSE_CREATE_SUCCESS;
     }

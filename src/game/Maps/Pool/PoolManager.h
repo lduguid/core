@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -134,6 +136,8 @@ class PoolGroup
         void Spawn1Object(MapPersistentState& mapState, PoolObject* obj, bool instantly);
         void ReSpawn1Object(MapPersistentState& mapState, PoolObject* obj);
         void RemoveOneRelation(uint16 child_pool_id);
+
+        time_t GetPoolObjectRespawnTime(MapPersistentState& mapState, uint32 guid);
 
         PoolObjectList const& GetExplicitlyChanced() const { return ExplicitlyChanced; }
         PoolObjectList const& GetEqualChanced() const { return EqualChanced; }

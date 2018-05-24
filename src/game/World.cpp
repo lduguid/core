@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2005-2011 MaNGOS <http://getmangos.com/>
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
+ * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
+ * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -483,9 +485,11 @@ void World::LoadConfigSettings(bool reload)
         }
     }
 
+    m_wowPatch = sConfig.GetIntDefault("WowPatch", WOW_PATCH_102);
+
     ///- Read the player limit and the Message of the day from the config file
     SetPlayerLimit(sConfig.GetIntDefault("PlayerLimit", DEFAULT_PLAYER_LIMIT), true);
-    SetMotd(sConfig.GetStringDefault("Motd", "Welcome to the Massive Network Game Object Server."));
+    SetMotd(sConfig.GetStringDefault("Motd", "Welcome to the Massive Network Game Object Server.") + std::string("\n") + std::string(ObjectMgr::GetPatchName()) + std::string(" is now live!"));
 
     ///- Read all rates from the config file
     setConfigPos(CONFIG_FLOAT_RATE_HEALTH, "Rate.Health", 1.0f);
@@ -757,6 +761,8 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_UINT32_BATTLEGROUND_PREMATURE_FINISH_TIMER,       "BattleGround.PrematureFinishTimer", 5 * MINUTE * IN_MILLISECONDS);
     setConfig(CONFIG_UINT32_BATTLEGROUND_PREMADE_GROUP_WAIT_FOR_MATCH, "BattleGround.PremadeGroupWaitForMatch", 0);
     setConfig(CONFIG_UINT32_BATTLEGROUND_PREMADE_QUEUE_GROUP_MIN_SIZE, "BattleGround.PremadeQueue.MinGroupSize", 6);
+    setConfig(CONFIG_BOOL_BATTLEGROUND_RANDOMIZE,                      "BattleGround.RandomizeQueues", false);
+    setConfig(CONFIG_UINT32_BATTLEGROUND_GROUP_LIMIT,                  "BattleGround.GroupQueueLimit", 40);
 
     setConfig(CONFIG_BOOL_KICK_PLAYER_ON_BAD_PACKET, "Network.KickOnBadPacket", false);
 
@@ -874,6 +880,7 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_VMAP_INDOOR_CHECK, "vmap.enableIndoorCheck", true);
     bool enableLOS = sConfig.GetBoolDefault("vmap.enableLOS", false);
     bool enableHeight = sConfig.GetBoolDefault("vmap.enableHeight", false);
+    bool disableModelUnload = sConfig.GetBoolDefault("Collision.Models.Unload", false);
     std::string ignoreSpellIds = sConfig.GetStringDefault("vmap.ignoreSpellIds", "");
 
     if (!enableHeight)
@@ -881,6 +888,7 @@ void World::LoadConfigSettings(bool reload)
 
     VMAP::VMapFactory::createOrGetVMapManager()->setEnableLineOfSightCalc(enableLOS);
     VMAP::VMapFactory::createOrGetVMapManager()->setEnableHeightCalc(enableHeight);
+    VMAP::VMapFactory::createOrGetVMapManager()->setDisableModelUnload(disableModelUnload);
     VMAP::VMapFactory::preventSpellsFromBeingTestedForLoS(ignoreSpellIds.c_str());
     sLog.outString("WORLD: VMap support included. LineOfSight:%i, getHeight:%i, indoorCheck:%i",
                    enableLOS, enableHeight, getConfig(CONFIG_BOOL_VMAP_INDOOR_CHECK) ? 1 : 0);
@@ -898,9 +906,13 @@ void World::LoadConfigSettings(bool reload)
     setConfig(CONFIG_BOOL_IS_MAPSERVER,                             "IsMapServer", false);
 
     m_timeZoneOffset = sConfig.GetIntDefault("TimeZoneOffset", 0) * HOUR;
-    m_wowPatch = sConfig.GetIntDefault("WowPatch", WOW_PATCH_102);
 
     LoadNostalriusConfig(reload);
+
+    // PvP options
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS, "PvP.AccurateEquipRequirements", false);
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_PURCHASE_REQUIREMENTS, "PvP.AccuratePurchaseRequirements", false);
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_ZONE_REQUIREMENTS, "PvP.AccurateZoneRequirements", false);
 
     // Smartlog data
     sLog.InitSmartlogEntries(sConfig.GetStringDefault("Smartlog.ExtraEntries", ""));
@@ -981,6 +993,9 @@ void World::LoadNostalriusConfig(bool reload)
     setConfig(CONFIG_UINT32_CHANNEL_INVITE_MIN_LEVEL,                   "ChannelInvite.MinLevel", 10);
     setConfig(CONFIG_BOOL_WHISPER_RESTRICTION,                          "WhisperRestriction", false);
     setConfig(CONFIG_UINT32_WORLD_CHAN_MIN_LEVEL,                       "WorldChan.MinLevel", 0);
+    setConfig(CONFIG_UINT32_SAY_MIN_LEVEL,                              "SayMinLevel", 0);
+    setConfig(CONFIG_UINT32_YELL_MIN_LEVEL,                             "YellMinLevel", 0);
+    setConfig(CONFIG_UINT32_SAY_EMOTE_MIN_LEVEL,                        "SayEmoteMinLevel", 0);
     setConfig(CONFIG_UINT32_WHISP_DIFF_ZONE_MIN_LEVEL,                  "WhisperDiffZone.MinLevel", 0);
     setConfig(CONFIG_UINT32_YELLRANGE_LINEARSCALE_MAXLEVEL,             "YellRange.LinearScale.MaxLevel", 0);
     setConfig(CONFIG_UINT32_YELLRANGE_QUADRATICSCALE_MAXLEVEL,          "YellRange.QuadraticScale.MaxLevel", 0);
@@ -1018,12 +1033,16 @@ void World::LoadNostalriusConfig(bool reload)
     setConfig(CONFIG_BOOL_GMTICKETS_ENABLE,                             "GMTickets.Enable", true);
     setConfig(CONFIG_UINT32_GMTICKETS_MINLEVEL,                         "GMTickets.MinLevel", 0);
     setConfig(CONFIG_UINT32_GMTICKETS_ADMIN_SECURITY,                   "GMTickets.Admin.Security", SEC_CONSOLE);
-    setConfig(CONFIG_BOOL_COLLISION_MODELS_UNLOAD,                      "Collision.Models.Unload", true);
     setConfig(CONFIG_UINT32_COD_FORCE_TAG_MAX_LEVEL,                    "Mails.COD.ForceTag.MaxLevel", 0);
     setConfig(CONFIG_UINT32_EMPTY_MAPS_UPDATE_TIME,                     "Maps.Empty.UpdateTime", 0);
     setConfig(CONFIG_UINT32_PACKET_BCAST_THREADS,                       "Network.PacketBroadcast.Threads", 0);
     setConfig(CONFIG_UINT32_PACKET_BCAST_FREQUENCY,                     "Network.PacketBroadcast.Frequency", 50);
     setConfig(CONFIG_UINT32_PBCAST_DIFF_LOWER_VISIBILITY_DISTANCE,      "Network.PacketBroadcast.ReduceVisDistance.DiffAbove", 0);
+
+    setConfig(CONFIG_UINT32_RESPEC_BASE_COST,                           "Rate.RespecBaseCost",           1);
+    setConfig(CONFIG_UINT32_RESPEC_MULTIPLICATIVE_COST,                 "Rate.RespecMultiplicativeCost", 5);
+    setConfig(CONFIG_UINT32_RESPEC_MIN_MULTIPLIER,                      "Rate.RespecMinMultiplier",      2);
+    setConfig(CONFIG_UINT32_RESPEC_MAX_MULTIPLIER,                      "Rate.RespecMaxMultiplier",      10);
 
     if (getConfig(CONFIG_BOOL_ALLOW_TWO_SIDE_INTERACTION_CHAT))
         setConfig(CONFIG_BOOL_GM_JOIN_OPPOSITE_FACTION_CHANNELS, false);
@@ -1154,6 +1173,9 @@ void World::SetInitialWorldSettings()
 
         sLog.outString("Packing groups...");
         sObjectMgr.PackGroupIds();                              // must be after CleanupInstances
+
+        sLog.outString("Scheduling normal instance reset...");
+        sMapPersistentStateMgr.ScheduleInstanceResets();        // Must be after cleanup and packing
     }
 
     ///- Init highest guids before any guid using table loading to prevent using not initialized guids in some code.
@@ -1272,6 +1294,10 @@ void World::SetInitialWorldSettings()
     sLog.outString();
     sObjectMgr.LoadQuestRelations();                        // must be after quest load
     sLog.outString(">>> Quests Relations loaded");
+    sLog.outString();
+
+    sLog.outString("Loading Quests Greetings...");          // must be loaded after creature_template
+    sObjectMgr.LoadQuestGreetings();
     sLog.outString();
 
     sLog.outString("Loading Game Event Data...");           // must be after sPoolMgr.LoadFromDB and quests to properly load pool events and quests for events
@@ -1600,7 +1626,13 @@ void World::SetInitialWorldSettings()
     if (!isMapServer)
         m_charDbWorkerThread = new ACE_Based::Thread(new CharactersDatabaseWorkerThread());
 
-    sLog.outString("%s initialized", isMapServer ? "Node" : "World");
+    sLog.outString();
+    sLog.outString("==========================================================");
+    sLog.outString("Current content is set to %s.", ObjectMgr::GetPatchName());
+    sLog.outString("==========================================================");
+    sLog.outString();
+
+    sLog.outString("%s initialized.", isMapServer ? "Node" : "World");
 
     uint32 uStartInterval = WorldTimer::getMSTimeDiff(uStartTime, WorldTimer::getMSTime());
     sLog.outString("SERVER STARTUP TIME: %i minutes %i seconds", uStartInterval / 60000, (uStartInterval % 60000) / 1000);
@@ -2074,8 +2106,13 @@ void World::BanAccount(uint32 accountId, uint32 duration, std::string reason, st
         sAccountMgr.BanAccount(accountId, 0xFFFFFFFF);
 
     if (WorldSession* sess = FindSession(accountId))
+    {
         if (std::string(sess->GetPlayerName()) != author)
+        {
+            sess->LogoutPlayer(true);
             sess->KickPlayer();
+        }
+    }
 }
 
 /// Ban an account or ban an IP address, duration_secs if it is positive used, otherwise permban
@@ -2140,8 +2177,13 @@ BanReturn World::BanAccount(BanMode mode, std::string nameOrIP, uint32 duration_
         }
 
         if (WorldSession* sess = FindSession(account))
+        {
             if (std::string(sess->GetPlayerName()) != author)
+            {
+                sess->LogoutPlayer(true);
                 sess->KickPlayer();
+            }
+        }
     }
     while (resultAccounts->NextRow());
 
@@ -2710,7 +2752,7 @@ void World::LogTransaction(PlayerTransactionData const& data)
         std::stringstream items;
         for (int i = 0; i < TransactionPart::MAX_TRANSACTION_ITEMS; ++i)
             if (part.itemsEntries[i])
-                items << uint32(part.itemsEntries[i]) << ":" << uint32(part.itemsCount[i]) << " ";
+                items << uint32(part.itemsEntries[i]) << ":" << uint32(part.itemsCount[i]) << ":" << part.itemsGuid[i];
         logStmt.addString(items.str());
     }
     logStmt.Execute();
